@@ -290,6 +290,16 @@ function turnCompletedWithNestedThread(
   return { method: notification.method, params: { threadId: "parent-thread", turn } };
 }
 
+function defineThrowingProperty(record: Record<string, unknown>, key: string, message: string) {
+  Object.defineProperty(record, key, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      throw new Error(message);
+    },
+  });
+}
+
 function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQuestion>[0]> = {}) {
   return {
     cfg: {} as never,
@@ -499,6 +509,108 @@ describe("runCodexAppServerSideQuestion", () => {
     const result = await runCodexAppServerSideQuestion(sideParams());
 
     expect(result).toEqual({ text: "Nested answer." });
+  });
+
+  it("ignores unreadable synthetic side-thread completion fields without throwing", async () => {
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          const params: Record<string, unknown> = {
+            threadId: "side-thread",
+            turnId: "turn-1",
+          };
+          defineThrowingProperty(params, "turn", "fuzzplugin side-thread notification read failed");
+          client.emit({ method: "turn/completed", params: params as JsonObject });
+          client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+        });
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(runCodexAppServerSideQuestion(sideParams())).resolves.toEqual({
+      text: "Side answer.",
+    });
+  });
+
+  it("ignores unreadable synthetic side-thread user-input routing fields", async () => {
+    const client = createFakeClient();
+    let userInputResponse: unknown;
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(async () => {
+          const params: Record<string, unknown> = { turnId: "turn-1" };
+          defineThrowingProperty(params, "threadId", "fuzzplugin side request read failed");
+          userInputResponse = await client.handleRequest({
+            id: 42,
+            method: "item/tool/requestUserInput",
+            params: params as JsonObject,
+          });
+          client.emit(turnCompleted("side-thread", "turn-1", "Side answer."));
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(runCodexAppServerSideQuestion(sideParams())).resolves.toEqual({
+      text: "Side answer.",
+    });
+    expect(userInputResponse).toBeUndefined();
+  });
+
+  it("reports unreadable synthetic side-thread retry fields without throwing", async () => {
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() => {
+          const params: Record<string, unknown> = {
+            threadId: "side-thread",
+            turnId: "turn-1",
+            message: "mockplugin side thread failed",
+          };
+          defineThrowingProperty(params, "willRetry", "mockplugin side retry read failed");
+          client.emit({ method: "error", params: params as JsonObject });
+        });
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await expect(runCodexAppServerSideQuestion(sideParams())).rejects.toThrow(
+      "mockplugin side thread failed",
+    );
   });
 
   it("rejects /btw before forking when the current OpenClaw session is sandboxed", async () => {

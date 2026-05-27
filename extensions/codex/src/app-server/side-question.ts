@@ -689,7 +689,11 @@ function isSideUserInputRequest(
   threadId: string,
   turnId: string,
 ): boolean {
-  return isJsonObject(value) && value.threadId === threadId && value.turnId === turnId;
+  return (
+    isJsonObject(value) &&
+    readString(value, "threadId") === threadId &&
+    readString(value, "turnId") === turnId
+  );
 }
 
 function resolveSideDynamicToolCallTimeoutMs(params: {
@@ -848,7 +852,7 @@ class CodexSideQuestionCollector {
   }
 
   handleNotification(notification: CodexServerNotification): void {
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const params = readJsonObject(notification, "params");
     if (!params) {
       return;
     }
@@ -940,7 +944,7 @@ class CodexSideQuestionCollector {
   }
 
   private completeFromTurn(params: JsonObject): void {
-    const turn = readCodexTurn(params.turn);
+    const turn = readCodexTurn(readValue(params, "turn"));
     if (!turn || turn.id !== this.turnId) {
       return;
     }
@@ -1000,7 +1004,7 @@ function readNotificationTurnId(record: JsonObject): string | undefined {
 
 function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {
   for (const key of keys) {
-    const value = record[key];
+    const value = readValue(record, key);
     if (typeof value === "boolean") {
       return value;
     }
@@ -1009,19 +1013,34 @@ function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean 
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
+  const value = readValue(record, key);
   return typeof value === "string" ? value : undefined;
+}
+
+function readJsonObject(record: object, key: string): JsonObject | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readValue(record: object, key: string): unknown {
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }
 
 function formatCodexErrorMessage(
   params: JsonObject,
   latestRateLimits: JsonValue | undefined,
 ): Error {
-  const error = isJsonObject(params.error) ? params.error : undefined;
+  const error = readJsonObject(params, "error");
   const message =
     formatCodexUsageLimitErrorMessage({
       message: error ? readString(error, "message") : undefined,
-      codexErrorInfo: error?.codexErrorInfo,
+      codexErrorInfo: error
+        ? (readValue(error, "codexErrorInfo") as JsonValue | null | undefined)
+        : undefined,
       rateLimits: latestRateLimits ?? readRecentCodexRateLimits(),
     }) ??
     (error ? (readString(error, "message") ?? readString(error, "error")) : undefined) ??
