@@ -228,12 +228,12 @@ export class CodexNativeSubagentMonitor {
   }
 
   private resolveMirrorState(notification: CodexServerNotification): ParentState | undefined {
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const params = readJsonObject(notification, "params");
     if (!params) {
       return undefined;
     }
     if (notification.method === "thread/started") {
-      const thread = isJsonObject(params.thread) ? params.thread : undefined;
+      const thread = readJsonObject(params, "thread");
       const parentThreadId = readSpawnParentThreadId(thread);
       const childThreadId = thread ? readString(thread, "id")?.trim() : undefined;
       const agentPath = readSpawnAgentPath(thread);
@@ -249,7 +249,7 @@ export class CodexNativeSubagentMonitor {
       return parentThreadId ? this.parentStates.get(parentThreadId) : undefined;
     }
     if (notification.method === "item/started" || notification.method === "item/completed") {
-      const item = isJsonObject(params.item) ? params.item : undefined;
+      const item = readJsonObject(params, "item");
       const parentThreadId = item
         ? (readString(item, "senderThreadId") ?? readString(params, "threadId"))?.trim()
         : undefined;
@@ -258,10 +258,10 @@ export class CodexNativeSubagentMonitor {
         const isSpawnAgentTool = normalizeToolName(readString(item, "tool")) === "spawnagent";
         const childThreadIds = isSpawnAgentTool
           ? new Set([
-              ...readStringArray(item?.receiverThreadIds),
-              ...readObjectStringKeys(item?.agentsStates),
+              ...readStringArray(readValue(item, "receiverThreadIds")),
+              ...readObjectStringKeys(readValue(item, "agentsStates")),
             ])
-          : new Set(readStringArray(item?.receiverThreadIds));
+          : new Set(readStringArray(readValue(item, "receiverThreadIds")));
         for (const childThreadId of childThreadIds) {
           this.registerChildThread(parentThreadId, childThreadId);
         }
@@ -272,7 +272,7 @@ export class CodexNativeSubagentMonitor {
   }
 
   private async handleCompletionNotification(notification: CodexServerNotification): Promise<void> {
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const params = readJsonObject(notification, "params");
     const parentThreadId = params ? readString(params, "threadId")?.trim() : undefined;
     const state = parentThreadId ? this.parentStates.get(parentThreadId) : undefined;
     if (!state) {
@@ -825,21 +825,37 @@ function toThreadCompletion(
 }
 
 function readSpawnParentThreadId(thread: JsonObject | undefined): string | undefined {
-  const source = isJsonObject(thread?.source) ? thread.source : undefined;
-  const subAgent = isJsonObject(source?.subAgent) ? source.subAgent : undefined;
-  const spawn = isJsonObject(subAgent?.thread_spawn) ? subAgent.thread_spawn : undefined;
+  const source = readJsonObject(thread, "source");
+  const subAgent = readJsonObject(source, "subAgent");
+  const spawn = readJsonObject(subAgent, "thread_spawn");
   return readString(spawn, "parent_thread_id")?.trim();
 }
 
 function readSpawnAgentPath(thread: JsonObject | undefined): string | undefined {
-  const source = isJsonObject(thread?.source) ? thread.source : undefined;
-  const subAgent = isJsonObject(source?.subAgent) ? source.subAgent : undefined;
-  const spawn = isJsonObject(subAgent?.thread_spawn) ? subAgent.thread_spawn : undefined;
+  const source = readJsonObject(thread, "source");
+  const subAgent = readJsonObject(source, "subAgent");
+  const spawn = readJsonObject(subAgent, "thread_spawn");
   return readString(spawn, "agent_path")?.trim();
 }
 
-function readString(record: JsonObject | undefined, key: string): string | undefined {
-  const value = record?.[key];
+function readValue(record: object | undefined, key: string): unknown {
+  if (!record) {
+    return undefined;
+  }
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readJsonObject(record: object | undefined, key: string): JsonObject | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readString(record: object | undefined, key: string): string | undefined {
+  const value = readValue(record, key);
   return typeof value === "string" ? value : undefined;
 }
 
@@ -847,14 +863,24 @@ function readStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
+  try {
+    return value.filter(
+      (entry): entry is string => typeof entry === "string" && entry.trim() !== "",
+    );
+  } catch {
+    return [];
+  }
 }
 
-function readObjectStringKeys(value: JsonValue | undefined): string[] {
+function readObjectStringKeys(value: unknown): string[] {
   if (!isJsonObject(value)) {
     return [];
   }
-  return Object.keys(value).filter((entry) => entry.trim() !== "");
+  try {
+    return Object.keys(value).filter((entry) => entry.trim() !== "");
+  } catch {
+    return [];
+  }
 }
 
 function normalizeToolName(value: string | undefined): string | undefined {
@@ -1024,16 +1050,14 @@ async function readTranscriptCompletion(
 }
 
 function readTranscriptParentThreadId(payload: JsonObject): string | undefined {
-  const source = isJsonObject(payload.source) ? payload.source : undefined;
-  const subagent =
-    (isJsonObject(source?.subagent) ? source.subagent : undefined) ??
-    (isJsonObject(source?.subAgent) ? source.subAgent : undefined);
-  const spawn = isJsonObject(subagent?.thread_spawn) ? subagent.thread_spawn : undefined;
+  const source = readJsonObject(payload, "source");
+  const subagent = readJsonObject(source, "subagent") ?? readJsonObject(source, "subAgent");
+  const spawn = readJsonObject(subagent, "thread_spawn");
   return readString(spawn, "parent_thread_id")?.trim();
 }
 
 function readNumber(record: JsonObject, key: string): number | undefined {
-  return asFiniteNumber(record[key]);
+  return asFiniteNumber(readValue(record, key));
 }
 
 function secondsToMillis(value: number | undefined): number | undefined {

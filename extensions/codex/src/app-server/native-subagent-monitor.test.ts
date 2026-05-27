@@ -135,6 +135,14 @@ function nativeCompletionNotification(params: {
   };
 }
 
+function defineThrowingProperty(target: object, key: string): void {
+  Object.defineProperty(target, key, {
+    get() {
+      throw new Error(`fuzzplugin unreadable ${key}`);
+    },
+  });
+}
+
 describe("CodexNativeSubagentMonitor", () => {
   it("keeps native subagent task mirroring alive on the shared client", async () => {
     const client = createClient();
@@ -457,6 +465,55 @@ describe("CodexNativeSubagentMonitor", () => {
         result: "state-only done",
       }),
     );
+  });
+
+  it("ignores unreadable synthetic native subagent monitor notification fields", async () => {
+    const client = createClient();
+    const runtime = createRuntime();
+    const monitor = new CodexNativeSubagentMonitor(client, runtime);
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope(),
+      agentId: "main",
+    });
+
+    const unreadableParams = { method: "thread/started" } as CodexServerNotification;
+    defineThrowingProperty(unreadableParams, "params");
+
+    const unreadableThread = { method: "thread/started", params: {} } as CodexServerNotification;
+    defineThrowingProperty(unreadableThread.params as object, "thread");
+
+    const unreadableSpawnSource = {
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "mockplugin-child",
+        },
+      },
+    } as CodexServerNotification;
+    defineThrowingProperty((unreadableSpawnSource.params as { thread: object }).thread, "source");
+
+    const unreadableItemFields = {
+      method: "item/completed",
+      params: {
+        threadId: "parent-thread",
+        item: {
+          senderThreadId: "parent-thread",
+          tool: "spawn_agent",
+        },
+      },
+    } as CodexServerNotification;
+    const unreadableItem = (unreadableItemFields.params as { item: object }).item;
+    defineThrowingProperty(unreadableItem, "receiverThreadIds");
+    defineThrowingProperty(unreadableItem, "agentsStates");
+
+    await expect(client.notify(unreadableParams)).resolves.toBeUndefined();
+    await expect(client.notify(unreadableThread)).resolves.toBeUndefined();
+    await expect(client.notify(unreadableSpawnSource)).resolves.toBeUndefined();
+    await expect(client.notify(unreadableItemFields)).resolves.toBeUndefined();
+
+    expect(runtime.deliverAgentHarnessTaskCompletion).not.toHaveBeenCalled();
   });
 
   it("ignores spoofed completion notifications for unknown child threads", async () => {
