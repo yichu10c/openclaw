@@ -111,9 +111,7 @@ export function createCodexUserInputBridge(params: {
       if (notification.method !== "serverRequest/resolved" || !pending) {
         return;
       }
-      const notificationParams = isJsonObject(notification.params)
-        ? notification.params
-        : undefined;
+      const notificationParams = readJsonObject(notification, "params");
       const requestId = notificationParams ? readRequestId(notificationParams) : undefined;
       if (
         notificationParams &&
@@ -144,7 +142,7 @@ function readUserInputParams(value: JsonValue | undefined):
   const threadId = readString(value, "threadId");
   const turnId = readString(value, "turnId");
   const itemId = readString(value, "itemId");
-  const questionsRaw = value.questions;
+  const questionsRaw = readValue(value, "questions");
   if (!threadId || !turnId || !itemId || !Array.isArray(questionsRaw)) {
     return undefined;
   }
@@ -168,13 +166,13 @@ function readQuestion(value: JsonValue): UserInputQuestion | undefined {
     id,
     header,
     question,
-    isOther: value.isOther === true,
-    isSecret: value.isSecret === true,
-    options: readOptions(value.options),
+    isOther: readValue(value, "isOther") === true,
+    isSecret: readValue(value, "isSecret") === true,
+    options: readOptions(readValue(value, "options")),
   };
 }
 
-function readOptions(value: JsonValue | undefined): UserInputOption[] | null {
+function readOptions(value: unknown): UserInputOption[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
@@ -306,11 +304,24 @@ function emptyUserInputResponse(): JsonObject {
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
+  const value = readValue(record, key);
   return typeof value === "string" ? value : undefined;
 }
 
 function readRequestId(record: JsonObject): string | number | undefined {
-  const value = record.requestId;
+  const value = readValue(record, "requestId");
   return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function readJsonObject(record: object, key: string): JsonObject | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readValue(record: object, key: string): unknown {
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }

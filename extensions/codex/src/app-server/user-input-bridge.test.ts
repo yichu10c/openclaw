@@ -22,6 +22,16 @@ function expectFirstBlockReplyText(params: EmbeddedRunAttemptParams): string {
   return payload.text;
 }
 
+function defineThrowingProperty(record: Record<string, unknown>, key: string, message: string) {
+  Object.defineProperty(record, key, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      throw new Error(message);
+    },
+  });
+}
+
 describe("Codex app-server user input bridge", () => {
   it("prompts the originating chat and resolves request_user_input from the next queued message", async () => {
     const params = createParams();
@@ -222,6 +232,65 @@ describe("Codex app-server user input bridge", () => {
 
     await expect(response).resolves.toEqual({ answers: {} });
     expect(bridge.handleQueuedMessage("too late")).toBe(false);
+  });
+
+  it("ignores unreadable synthetic user input request fields", async () => {
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const requestParams = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "tool-1",
+    };
+    defineThrowingProperty(requestParams, "questions", "fuzzplugin user input read failed");
+
+    await expect(
+      bridge.handleRequest({
+        id: "input-unreadable",
+        params: requestParams as never,
+      }),
+    ).resolves.toBeUndefined();
+    expect(params.onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("ignores unreadable synthetic user input resolution notifications", async () => {
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const response = bridge.handleRequest({
+      id: "input-notification",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "tool-1",
+        questions: [
+          {
+            id: "answer",
+            header: "Answer",
+            question: "Continue?",
+            isOther: true,
+            isSecret: false,
+            options: null,
+          },
+        ],
+      },
+    });
+
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
+    const notification = { method: "serverRequest/resolved" };
+    defineThrowingProperty(notification, "params", "mockplugin user input notification failed");
+    expect(() => bridge.handleNotification(notification as never)).not.toThrow();
+    expect(bridge.handleQueuedMessage("yes")).toBe(true);
+
+    await expect(response).resolves.toEqual({ answers: { answer: { answers: ["yes"] } } });
   });
 
   it("resolves malformed empty question prompts without waiting for chat input", async () => {
