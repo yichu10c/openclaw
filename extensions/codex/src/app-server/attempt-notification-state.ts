@@ -18,7 +18,7 @@ import {
 } from "./attempt-notifications.js";
 import { CODEX_POST_REASONING_SOURCE_REPLY_IDLE_TIMEOUT_MS } from "./attempt-timeouts.js";
 import type { CodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
-import type { CodexServerNotification } from "./protocol.js";
+import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 
 type CodexExecutionPhase =
   | { phase: "turn_accepted" }
@@ -43,7 +43,8 @@ export function reportCodexExecutionNotification(params: {
   if (notification.method !== "item/started") {
     return;
   }
-  const item = readCodexNotificationItem(notification.params);
+  const notificationParams = readNotificationParams(notification);
+  const item = readCodexNotificationItem(notificationParams);
   const tool = item ? codexExecutionToolName(item) : undefined;
   if (!item || !tool) {
     return;
@@ -61,7 +62,9 @@ export function isTerminalCodexTurnNotificationForTurn(params: {
   turnId: string;
   currentPromptTexts: string[];
 }): boolean {
-  if (!isTurnNotification(params.notification.params, params.threadId, params.turnId)) {
+  if (
+    !isTurnNotification(readNotificationParams(params.notification), params.threadId, params.turnId)
+  ) {
     return false;
   }
   return (
@@ -93,8 +96,9 @@ export function applyCodexTurnNotificationState(params: {
   turnCrossedToolHandoff: boolean;
 } {
   const { notification, turnWatches } = params;
+  const notificationParams = readNotificationParams(notification);
   const isCurrentTurnNotification = isTurnNotification(
-    notification.params,
+    notificationParams,
     params.threadId,
     params.turnId,
   );
@@ -163,7 +167,7 @@ export function applyCodexTurnNotificationState(params: {
     !shouldArmPostReasoningSourceReplyWatch;
 
   if (isCurrentTurnNotification && notification.method === "error") {
-    if (isRetryableErrorNotification(notification.params)) {
+    if (isRetryableErrorNotification(notificationParams)) {
       turnWatches.disarmCompletionIdleWatch();
     } else {
       turnWatches.armCompletionIdleWatch({ pinnedByTerminalError: true });
@@ -245,4 +249,21 @@ export function applyCodexTurnNotificationState(params: {
     isTurnTerminal,
     turnCrossedToolHandoff,
   };
+}
+
+function readNotificationParams(notification: CodexServerNotification): JsonObject | undefined {
+  return readJsonObject(notification, "params");
+}
+
+function readJsonObject(record: object, key: string): JsonObject | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readValue(record: object, key: string): unknown {
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }
