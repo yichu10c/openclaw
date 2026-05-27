@@ -46,4 +46,59 @@ describe("Codex app-server image payload sanitizer", () => {
       },
     ]);
   });
+
+  it("omits unreadable synthetic mirrored history fields", () => {
+    const value: Record<string, unknown> = {
+      plugin: "fuzzplugin",
+      content: [{ type: "text", text: "visible" }],
+    };
+    Object.defineProperty(value, "unreadable", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin mirrored history read failed");
+      },
+    });
+
+    expect(() => sanitizeCodexHistoryImagePayloads(value, "codex mirrored history")).not.toThrow();
+    expect(sanitizeCodexHistoryImagePayloads(value, "codex mirrored history")).toEqual({
+      plugin: "fuzzplugin",
+      content: [{ type: "text", text: "visible" }],
+    });
+  });
+
+  it("scrubs unreadable synthetic image payload fields", () => {
+    const imageBlock: Record<string, unknown> = {
+      type: "image",
+      mimeType: "image/png",
+    };
+    Object.defineProperty(imageBlock, "data", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin image data read failed");
+      },
+    });
+
+    const inputImageBlock: Record<string, unknown> = {
+      type: "inputImage",
+    };
+    Object.defineProperty(inputImageBlock, "imageUrl", {
+      enumerable: true,
+      get() {
+        throw new Error("mockplugin image URL read failed");
+      },
+    });
+
+    expect(
+      sanitizeCodexHistoryImagePayloads([imageBlock, inputImageBlock], "codex mirrored history"),
+    ).toEqual([
+      {
+        type: "text",
+        text: "[codex mirrored history] omitted image payload: invalid inline image data",
+      },
+      {
+        type: "inputText",
+        text: "[codex mirrored history] omitted image payload: invalid inline image data",
+      },
+    ]);
+  });
 });

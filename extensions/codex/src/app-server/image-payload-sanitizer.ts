@@ -111,6 +111,37 @@ function metadataAllowsImageBase64(metadata: string[]): boolean {
   return isImageMimeType && options.some((part) => part.toLowerCase() === "base64");
 }
 
+function readRecordValue(record: Record<string, unknown>, key: string): unknown {
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readableRecordEntries(record: Record<string, unknown>): Array<[string, unknown]> {
+  let keys: string[];
+  try {
+    keys = Object.keys(record);
+  } catch {
+    return [];
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, record[key]]);
+    } catch {
+      // Mirrored history can include synthetic plugin objects with throwing
+      // getters. Drop unreadable fields before image sanitation recurses.
+    }
+  }
+  return entries;
+}
+
+function cloneReadableRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(readableRecordEntries(record));
+}
+
 export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined {
   const parsed = parseImageDataUrl(imageUrl);
   if (!parsed) {
@@ -142,29 +173,43 @@ function sanitizeImageContentRecord(
   record: Record<string, unknown>,
   label: string,
 ): Record<string, unknown> | undefined {
-  if (record.type === "image" && typeof record.data === "string") {
-    const mimeType = typeof record.mimeType === "string" ? record.mimeType : "image/png";
-    const imageUrl = sanitizeInlineImageDataUrl(`data:${mimeType};base64,${record.data}`);
+  const type = readRecordValue(record, "type");
+  const data = readRecordValue(record, "data");
+  if (type === "image") {
+    if (typeof data !== "string") {
+      return { type: "text", text: invalidInlineImageText(label) };
+    }
+    const rawMimeType = readRecordValue(record, "mimeType");
+    const mimeType = typeof rawMimeType === "string" ? rawMimeType : "image/png";
+    const imageUrl = sanitizeInlineImageDataUrl(`data:${mimeType};base64,${data}`);
     if (!imageUrl) {
       return { type: "text", text: invalidInlineImageText(label) };
     }
     const commaIndex = imageUrl.indexOf(",");
     const metadata = imageUrl.slice(DATA_URL_PREFIX.length, commaIndex);
     const mime = metadata.split(";")[0] ?? mimeType;
-    return { ...record, mimeType: mime, data: imageUrl.slice(commaIndex + 1) };
+    return { ...cloneReadableRecord(record), mimeType: mime, data: imageUrl.slice(commaIndex + 1) };
   }
 
-  if (record.type === "inputImage" && typeof record.imageUrl === "string") {
-    const imageUrl = sanitizeInlineImageDataUrl(record.imageUrl);
+  const imageUrlValue = readRecordValue(record, "imageUrl");
+  if (type === "inputImage") {
+    if (typeof imageUrlValue !== "string") {
+      return { type: "inputText", text: invalidInlineImageText(label) };
+    }
+    const imageUrl = sanitizeInlineImageDataUrl(imageUrlValue);
     return imageUrl
-      ? { ...record, imageUrl }
+      ? { ...cloneReadableRecord(record), imageUrl }
       : { type: "inputText", text: invalidInlineImageText(label) };
   }
 
-  if (record.type === "input_image" && typeof record.image_url === "string") {
-    const imageUrl = sanitizeInlineImageDataUrl(record.image_url);
+  const imageUrlSnakeValue = readRecordValue(record, "image_url");
+  if (type === "input_image") {
+    if (typeof imageUrlSnakeValue !== "string") {
+      return { type: "input_text", text: invalidInlineImageText(label) };
+    }
+    const imageUrl = sanitizeInlineImageDataUrl(imageUrlSnakeValue);
     return imageUrl
-      ? { ...record, image_url: imageUrl }
+      ? { ...cloneReadableRecord(record), image_url: imageUrl }
       : { type: "input_text", text: invalidInlineImageText(label) };
   }
 
@@ -185,7 +230,7 @@ export function sanitizeCodexHistoryImagePayloads<T>(value: T, label: string): T
   }
 
   const next: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
+  for (const [key, child] of readableRecordEntries(value)) {
     next[key] = sanitizeCodexHistoryImagePayloads(child, label);
   }
   return next as T;

@@ -11,6 +11,25 @@ import {
   type JsonValue,
 } from "./protocol.js";
 
+function readableRecordEntries(record: Record<string, unknown>): Array<[string, unknown]> {
+  let keys: string[];
+  try {
+    keys = Object.keys(record);
+  } catch {
+    return [];
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, record[key]]);
+    } catch {
+      // Synthetic tool payloads can expose throwing getters. Treat those
+      // fields as absent so progress logging still emits the readable shape.
+    }
+  }
+  return entries;
+}
+
 export function resolveCodexToolProgressDetailMode(
   value: EmbeddedRunAttemptParams["toolProgressDetail"],
 ): ToolProgressDetailMode {
@@ -37,7 +56,7 @@ export function sanitizeCodexAgentEventValue(
     }
     seen.add(value);
     const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    for (const [key, child] of readableRecordEntries(value as Record<string, unknown>)) {
       out[key] =
         typeof child === "string"
           ? redactSensitiveFieldValue(key, child)
