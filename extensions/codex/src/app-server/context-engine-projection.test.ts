@@ -143,6 +143,55 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).not.toContain("sk-1234567890abcdef");
   });
 
+  it("omits unreadable synthetic tool payloads from preserved context", () => {
+    const unreadableInput: Record<string, unknown> = {};
+    Object.defineProperty(unreadableInput, "shape", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin input read failed");
+      },
+    });
+    const unreadableResult = {
+      type: "toolResult",
+      toolUseId: "call-1",
+    } as Record<string, unknown>;
+    Object.defineProperty(unreadableResult, "content", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin result read failed");
+      },
+    });
+
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              name: "fuzzplugin_echo_payload",
+              input: unreadableInput,
+            },
+          ],
+          timestamp: 1,
+        } as unknown as AgentMessage,
+        {
+          role: "toolResult",
+          content: [unreadableResult],
+          timestamp: 2,
+        } as unknown as AgentMessage,
+      ],
+      originalHistoryMessages: [],
+      prompt: "continue",
+      toolPayloadMode: "preserve",
+    });
+
+    expect(result.promptText).toContain("tool call: fuzzplugin_echo_payload");
+    expect(result.promptText).toContain('"inputShape": "[unreadable object]"');
+    expect(result.promptText).toContain("tool result: call-1");
+    expect(result.promptText).toContain('"content": "[unreadable object]"');
+  });
+
   it("bounds oversized text context", () => {
     const result = projectContextEngineAssemblyForCodex({
       assembledMessages: [textMessage("assistant", "x".repeat(30_000))],

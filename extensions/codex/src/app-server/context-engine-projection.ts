@@ -140,7 +140,7 @@ function dropDuplicateTrailingPrompt(messages: AgentMessage[], prompt: string): 
     return messages;
   }
   const trailing = messages.at(-1);
-  if (!trailing || trailing.role !== "user") {
+  if (!trailing || readObjectString(trailing, "role") !== "user") {
     return messages;
   }
   return extractMessageText(trailing).trim() === prompt ? messages.slice(0, -1) : messages;
@@ -153,7 +153,8 @@ function renderMessagesForCodexContext(
   return messages
     .map((message) => {
       const text = renderMessageBody(message, options);
-      return text ? `[${message.role}]\n${text}` : undefined;
+      const role = readObjectString(message, "role") ?? "message";
+      return text ? `[${role}]\n${text}` : undefined;
     })
     .filter((value): value is string => Boolean(value))
     .join("\n\n");
@@ -163,20 +164,25 @@ function renderMessageBody(
   message: AgentMessage,
   options: { maxTextPartChars: number; toolPayloadMode: "elide" | "preserve" },
 ): string {
-  if (!hasMessageContent(message)) {
+  const content = readObjectValue(message, "content");
+  if (content === undefined) {
     return "";
   }
-  if (typeof message.content === "string") {
-    return truncateText(message.content.trim(), options.maxTextPartChars);
+  if (typeof content === "string") {
+    return truncateText(content.trim(), options.maxTextPartChars);
   }
-  if (!Array.isArray(message.content)) {
+  if (!Array.isArray(content)) {
     return "[non-text content omitted]";
   }
-  return message.content
-    .map((part: unknown) => renderMessagePart(part, options))
-    .filter((value): value is string => value.length > 0)
-    .join("\n")
-    .trim();
+  try {
+    return content
+      .map((part: unknown) => renderMessagePart(part, options))
+      .filter((value): value is string => value.length > 0)
+      .join("\n")
+      .trim();
+  } catch {
+    return "[unreadable content omitted]";
+  }
 }
 
 function renderMessagePart(
@@ -187,17 +193,17 @@ function renderMessagePart(
     return "";
   }
   const record = part as Record<string, unknown>;
-  const type = typeof record.type === "string" ? record.type : undefined;
+  const type = readObjectString(record, "type");
   if (type === "text") {
-    return typeof record.text === "string"
-      ? truncateText(record.text.trim(), options.maxTextPartChars)
-      : "";
+    const text = readObjectString(record, "text");
+    return text ? truncateText(text.trim(), options.maxTextPartChars) : "";
   }
   if (type === "image") {
     return "[image omitted]";
   }
   if (type === "toolCall" || type === "tool_use") {
-    const label = `tool call${typeof record.name === "string" ? `: ${record.name}` : ""}`;
+    const name = readObjectString(record, "name");
+    const label = `tool call${name ? `: ${name}` : ""}`;
     if (options.toolPayloadMode === "preserve") {
       return truncateText(
         `${label}\n${stableJson(renderToolCallPayload(record))}`,
@@ -207,8 +213,8 @@ function renderMessagePart(
     return `${label} [input omitted]`;
   }
   if (type === "toolResult" || type === "tool_result") {
-    const label =
-      typeof record.toolUseId === "string" ? `tool result: ${record.toolUseId}` : "tool result";
+    const toolUseId = readObjectString(record, "toolUseId");
+    const label = toolUseId ? `tool result: ${toolUseId}` : "tool result";
     if (options.toolPayloadMode === "preserve") {
       return truncateText(
         `${label}\n${stableJson(renderToolResultPayload(record))}`,
@@ -222,7 +228,7 @@ function renderMessagePart(
 
 function renderToolCallPayload(record: Record<string, unknown>): Record<string, unknown> {
   const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
-  const input = record.input ?? record.arguments;
+  const input = readObjectValue(record, "input") ?? readObjectValue(record, "arguments");
   if (input !== undefined) {
     payload.inputShape = summarizeToolInputShape(input);
   }
@@ -231,7 +237,12 @@ function renderToolCallPayload(record: Record<string, unknown>): Record<string, 
 
 function renderToolResultPayload(record: Record<string, unknown>): Record<string, unknown> {
   const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
-  for (const [key, value] of Object.entries(record)) {
+  const entries = readObjectEntries(record);
+  if (!entries) {
+    payload.content = "[unreadable object]";
+    return payload;
+  }
+  for (const [key, value] of entries) {
     if (TOOL_PAYLOAD_METADATA_KEYS.has(key)) {
       continue;
     }
@@ -252,7 +263,7 @@ const TOOL_PAYLOAD_METADATA_KEYS = new Set([
 function pickToolPayloadMetadata(record: Record<string, unknown>): Record<string, unknown> {
   const payload: Record<string, unknown> = {};
   for (const key of TOOL_PAYLOAD_METADATA_KEYS) {
-    const value = record[key];
+    const value = readObjectValue(record, key);
     if (typeof value === "string" && value.trim()) {
       payload[key] = redactSensitiveFieldValue(key, value);
     }
@@ -271,7 +282,11 @@ function summarizeToolInputShape(value: unknown, seen = new WeakSet<object>()): 
       return "[Circular]";
     }
     seen.add(value);
-    return value.map((entry) => summarizeToolInputShape(entry, seen));
+    try {
+      return value.map((entry) => summarizeToolInputShape(entry, seen));
+    } catch {
+      return "[unreadable array]";
+    }
   }
   if (value && typeof value === "object") {
     if (seen.has(value)) {
@@ -279,7 +294,11 @@ function summarizeToolInputShape(value: unknown, seen = new WeakSet<object>()): 
     }
     seen.add(value);
     const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const entries = readObjectEntries(value);
+    if (!entries) {
+      return "[unreadable object]";
+    }
+    for (const [key, child] of entries) {
       out[key] = summarizeToolInputShape(child, seen);
     }
     return out;
@@ -310,7 +329,11 @@ function redactPreservedToolValue(
       return "[Circular]";
     }
     seen.add(value);
-    return value.map((entry) => redactPreservedToolValue(key, entry, seen));
+    try {
+      return value.map((entry) => redactPreservedToolValue(key, entry, seen));
+    } catch {
+      return "[unreadable array]";
+    }
   }
   if (value && typeof value === "object") {
     if (seen.has(value)) {
@@ -318,7 +341,11 @@ function redactPreservedToolValue(
     }
     seen.add(value);
     const out: Record<string, unknown> = {};
-    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
+    const entries = readObjectEntries(value);
+    if (!entries) {
+      return "[unreadable object]";
+    }
+    for (const [childKey, child] of entries) {
       out[childKey] = redactPreservedToolValue(childKey, child, seen);
     }
     return out;
@@ -335,28 +362,52 @@ function stableJson(value: unknown): string {
 }
 
 function extractMessageText(message: AgentMessage): string {
-  if (!hasMessageContent(message)) {
+  const content = readObjectValue(message, "content");
+  if (content === undefined) {
     return "";
   }
-  if (typeof message.content === "string") {
-    return message.content;
+  if (typeof content === "string") {
+    return content;
   }
-  if (!Array.isArray(message.content)) {
+  if (!Array.isArray(content)) {
     return "";
   }
-  return message.content
-    .flatMap((part: unknown) => {
-      if (!part || typeof part !== "object" || !("type" in part)) {
-        return [];
-      }
-      const record = part as Record<string, unknown>;
-      return record.type === "text" ? [typeof record.text === "string" ? record.text : ""] : [];
-    })
-    .join("\n");
+  try {
+    return content
+      .flatMap((part: unknown) => {
+        if (!part || typeof part !== "object") {
+          return [];
+        }
+        const record = part as Record<string, unknown>;
+        return readObjectString(record, "type") === "text"
+          ? [readObjectString(record, "text") ?? ""]
+          : [];
+      })
+      .join("\n");
+  } catch {
+    return "";
+  }
 }
 
-function hasMessageContent(message: AgentMessage): message is AgentMessage & { content: unknown } {
-  return "content" in message;
+function readObjectValue(record: object, key: string): unknown {
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readObjectString(record: object, key: string): string | undefined {
+  const value = readObjectValue(record, key);
+  return typeof value === "string" ? value : undefined;
+}
+
+function readObjectEntries(value: object): Array<[string, unknown]> | undefined {
+  try {
+    return Object.entries(value as Record<string, unknown>);
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeRenderedContextMaxChars(value: unknown): number {
