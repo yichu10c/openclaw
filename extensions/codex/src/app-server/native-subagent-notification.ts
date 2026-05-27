@@ -23,11 +23,11 @@ export type CodexNativeSubagentNotificationCompletion = CodexNativeSubagentCompl
 export function extractCodexNativeSubagentCompletions(
   notification: CodexServerNotification,
 ): CodexNativeSubagentNotificationCompletion[] {
-  const params = isJsonObject(notification.params) ? notification.params : undefined;
+  const params = readJsonObject(notification, "params");
   if (!params) {
     return [];
   }
-  const item = isJsonObject(params.item) ? params.item : undefined;
+  const item = readJsonObject(params, "item");
   if (!item) {
     return [];
   }
@@ -78,7 +78,7 @@ function parseCodexNativeSubagentNotificationBody(
     return undefined;
   }
   const agentPath = readString(payload, "agent_path")?.trim();
-  const status = isJsonObject(payload.status) ? payload.status : undefined;
+  const status = readJsonObject(payload, "status");
   if (!agentPath || !status) {
     return undefined;
   }
@@ -156,12 +156,12 @@ function stringifyResult(value: JsonValue | undefined): string {
 
 function readTrustedInterAgentCommunicationContent(item: JsonObject): string | undefined {
   const communication = readTrustedInterAgentCommunication(item);
-  return typeof communication?.content === "string" ? communication.content : undefined;
+  return communication ? readString(communication, "content") : undefined;
 }
 
 function readTrustedInterAgentCommunicationAuthor(item: JsonObject): string | undefined {
   const communication = readTrustedInterAgentCommunication(item);
-  return typeof communication?.author === "string" ? communication.author : undefined;
+  return communication ? readString(communication, "author") : undefined;
 }
 
 function readTrustedInterAgentCommunication(item: JsonObject): JsonObject | undefined {
@@ -186,10 +186,10 @@ function readTrustedInterAgentCommunication(item: JsonObject): JsonObject | unde
     return undefined;
   }
   if (
-    typeof parsed.author !== "string" ||
-    typeof parsed.recipient !== "string" ||
-    typeof parsed.content !== "string" ||
-    parsed.trigger_turn !== false
+    !readString(parsed, "author") ||
+    !readString(parsed, "recipient") ||
+    !readString(parsed, "content") ||
+    readValue(parsed, "trigger_turn") !== false
   ) {
     return undefined;
   }
@@ -197,7 +197,7 @@ function readTrustedInterAgentCommunication(item: JsonObject): JsonObject | unde
 }
 
 function extractSingleTextPart(item: JsonObject): string | undefined {
-  const content = item.content;
+  const content = readValue(item, "content");
   if (!Array.isArray(content) || content.length !== 1) {
     return undefined;
   }
@@ -213,8 +213,21 @@ function extractSingleTextPart(item: JsonObject): string | undefined {
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
+  const value = readValue(record, key);
   return typeof value === "string" ? value : undefined;
+}
+
+function readJsonObject(record: object, key: string): JsonObject | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readValue(record: object, key: string): unknown {
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeStatusKey(value: string): string {

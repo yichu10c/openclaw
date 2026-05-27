@@ -4,6 +4,16 @@ import {
   extractCodexNativeSubagentCompletionsFromText,
 } from "./native-subagent-notification.js";
 
+function defineThrowingProperty(record: Record<string, unknown>, key: string, message: string) {
+  Object.defineProperty(record, key, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      throw new Error(message);
+    },
+  });
+}
+
 function trustedInterAgentNotification(params: {
   agentPath: string;
   text: string;
@@ -172,5 +182,38 @@ describe("Codex native subagent notifications", () => {
         },
       }),
     ).toEqual([]);
+  });
+
+  it("ignores unreadable synthetic notification fields", () => {
+    const unreadableParams = { method: "rawResponseItem/completed" };
+    defineThrowingProperty(unreadableParams, "params", "fuzzplugin native params read failed");
+    expect(extractCodexNativeSubagentCompletions(unreadableParams as never)).toEqual([]);
+
+    const unreadableItem = {
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "parent-thread",
+      },
+    };
+    defineThrowingProperty(unreadableItem.params, "item", "mockplugin native item read failed");
+    expect(extractCodexNativeSubagentCompletions(unreadableItem as never)).toEqual([]);
+
+    const unreadableContent = {
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "parent-thread",
+        item: {
+          type: "message",
+          role: "assistant",
+          phase: "commentary",
+        },
+      },
+    };
+    defineThrowingProperty(
+      unreadableContent.params.item,
+      "content",
+      "fuzzplugin native content read failed",
+    );
+    expect(extractCodexNativeSubagentCompletions(unreadableContent as never)).toEqual([]);
   });
 });
