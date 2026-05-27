@@ -11,7 +11,7 @@ export function readCodexDiagnosticToolParameters(tool: {
   inputSchema?: unknown;
   parameters?: unknown;
 }): unknown {
-  return tool.inputSchema ?? tool.parameters;
+  return readValue(tool, "inputSchema") ?? readValue(tool, "parameters");
 }
 
 export function buildCodexDiagnosticToolDefinitions(
@@ -32,6 +32,14 @@ export function buildCodexDiagnosticToolDefinitions(
 export function utf8JsonByteLength(value: unknown): number | undefined {
   try {
     return Buffer.byteLength(JSON.stringify(value), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function readValue(record: object, key: string): unknown {
+  try {
+    return (record as Record<string, unknown>)[key];
   } catch {
     return undefined;
   }

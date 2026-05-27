@@ -1,9 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
+import {
+  buildCodexDiagnosticToolDefinitions,
+  buildCodexPluginThreadConfigEligibilityLogData,
+} from "./attempt-diagnostics.js";
 import { resolveCodexPluginsPolicy } from "./config.js";
 import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
 
+function defineThrowingProperty(record: Record<string, unknown>, key: string, message: string) {
+  Object.defineProperty(record, key, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      throw new Error(message);
+    },
+  });
+}
+
 describe("Codex app-server attempt diagnostics", () => {
+  it("omits unreadable synthetic tool parameters from diagnostic definitions", () => {
+    const tool = {
+      name: "fuzz_move_report",
+      description: "Synthetic diagnostic tool",
+    };
+    defineThrowingProperty(tool, "inputSchema", "fuzzplugin diagnostic schema read failed");
+    defineThrowingProperty(tool, "parameters", "mockplugin diagnostic parameters read failed");
+
+    expect(buildCodexDiagnosticToolDefinitions([tool])).toEqual([
+      {
+        name: "fuzz_move_report",
+        description: "Synthetic diagnostic tool",
+        parameters: undefined,
+      },
+    ]);
+  });
+
   it("redacts plugin thread config eligibility log data", () => {
     const appServer = {
       start: {
