@@ -12,6 +12,22 @@ import {
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
 
+type ParsedMessageTestClient = {
+  handleParsedMessage(parsed: unknown): void;
+};
+
+function handleParsedMessageForTest(client: CodexAppServerClient, parsed: unknown): void {
+  (client as unknown as ParsedMessageTestClient).handleParsedMessage(parsed);
+}
+
+function defineThrowingProperty(target: object, key: string): void {
+  Object.defineProperty(target, key, {
+    get() {
+      throw new Error(`fuzzplugin unreadable ${key}`);
+    },
+  });
+}
+
 describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];
 
@@ -150,6 +166,18 @@ describe("CodexAppServerClient", () => {
     await expect(request).rejects.toHaveProperty("name", "CodexAppServerRpcError");
     await expect(request).rejects.toHaveProperty("code", -32601);
     await expect(request).rejects.toHaveProperty("message", "Method not found");
+  });
+
+  it("rejects JSON-RPC error objects with empty messages", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const request = harness.client.request("future/method", {});
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({ id: outbound.id, error: { message: "" } });
+
+    await expect(request).rejects.toHaveProperty("name", "CodexAppServerRpcError");
+    await expect(request).rejects.toHaveProperty("message", "future/method failed");
   });
 
   it("surfaces relogin details from Codex app-server RPC errors", async () => {
@@ -477,6 +505,45 @@ describe("CodexAppServerClient", () => {
       id: "srv-1",
       result: { contentItems: [{ type: "inputText", text: "ok" }], success: true },
     });
+  });
+
+  it("ignores unreadable synthetic app-server message fields", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const notifications: unknown[] = [];
+    const requests: unknown[] = [];
+    harness.client.addNotificationHandler((notification) => {
+      notifications.push(notification);
+    });
+    harness.client.addRequestHandler((request) => {
+      requests.push(request);
+      return { contentItems: [{ type: "inputText", text: "ok" }], success: true };
+    });
+
+    const unreadableNotification = { method: "fuzzplugin/event" };
+    defineThrowingProperty(unreadableNotification, "params");
+    expect(() => handleParsedMessageForTest(harness.client, unreadableNotification)).not.toThrow();
+
+    const unreadableRequest = { id: "mockplugin-request", method: "item/tool/call" };
+    defineThrowingProperty(unreadableRequest, "params");
+    expect(() => handleParsedMessageForTest(harness.client, unreadableRequest)).not.toThrow();
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    const pending = harness.client.request("model/list", {});
+    const outbound = JSON.parse(harness.writes[1] ?? "{}") as { id?: number };
+    const unreadableResult = { id: outbound.id };
+    defineThrowingProperty(unreadableResult, "result");
+    expect(() => handleParsedMessageForTest(harness.client, unreadableResult)).not.toThrow();
+
+    await expect(pending).resolves.toBeUndefined();
+    expect(notifications).toEqual([{ method: "fuzzplugin/event", params: undefined }]);
+    expect(requests).toEqual([
+      {
+        id: "mockplugin-request",
+        method: "item/tool/call",
+        params: undefined,
+      },
+    ]);
   });
 
   it("fails closed when a dynamic tool server request handler hangs", async () => {

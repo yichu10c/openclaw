@@ -7,10 +7,8 @@ import {
   type CodexAppServerRequestResult,
   type CodexInitializeParams,
   type CodexInitializeResponse,
-  isRpcResponse,
   type CodexServerNotification,
   type JsonValue,
-  type RpcMessage,
   type RpcRequest,
   type RpcResponse,
 } from "./protocol.js";
@@ -62,19 +60,78 @@ function formatCodexAppServerRpcErrorMessage(
 
 function readCodexAppServerRpcReloginDetail(data: JsonValue | undefined): string | undefined {
   const record = isJsonObject(data) ? data : undefined;
-  const nested = isJsonObject(record?.error) ? record.error : record;
+  const nested = readJsonObject(record, "error") ?? record;
   if (!nested) {
     return undefined;
   }
   const isRelogin =
-    nested.action === "relogin" ||
-    (nested.reason === "cloudRequirements" && nested.errorCode === "Auth");
-  const detail = typeof nested.detail === "string" ? nested.detail.trim() : "";
+    readString(nested, "action") === "relogin" ||
+    (readString(nested, "reason") === "cloudRequirements" &&
+      readString(nested, "errorCode") === "Auth");
+  const detail = readString(nested, "detail")?.trim() ?? "";
   return isRelogin && detail ? detail : undefined;
 }
 
 function isJsonObject(value: unknown): value is { [key: string]: JsonValue } {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function hasKey(record: object, key: string): boolean {
+  try {
+    return key in record;
+  } catch {
+    return false;
+  }
+}
+
+function readRpcId(record: object): number | string | undefined {
+  const value = readValue(record, "id");
+  return typeof value === "number" || typeof value === "string" ? value : undefined;
+}
+
+function readRpcError(
+  record: object,
+): { code?: number; message: string; data?: JsonValue } | undefined {
+  const error = readJsonObject(record, "error");
+  if (!error) {
+    return undefined;
+  }
+  const message = readString(error, "message") ?? "";
+  const code = readValue(error, "code");
+  const data = readJsonValue(error, "data");
+  return {
+    ...(typeof code === "number" ? { code } : {}),
+    message,
+    ...(data !== undefined ? { data } : {}),
+  };
+}
+
+function readJsonObject(
+  record: object | undefined,
+  key: string,
+): { [key: string]: JsonValue } | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readJsonValue(record: object | undefined, key: string): JsonValue | undefined {
+  return readValue(record, key) as JsonValue | undefined;
+}
+
+function readString(record: object | undefined, key: string): string | undefined {
+  const value = readValue(record, key);
+  return typeof value === "string" ? value : undefined;
+}
+
+function readValue(record: object | undefined, key: string): unknown {
+  if (!record) {
+    return undefined;
+  }
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }
 
 export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
@@ -373,39 +430,46 @@ export class CodexAppServerClient {
     if (!parsed || typeof parsed !== "object") {
       return;
     }
-    const message = parsed as RpcMessage;
-    if (isRpcResponse(message)) {
+    const message = parsed;
+    if (hasKey(message, "id") && !hasKey(message, "method")) {
       this.handleResponse(message);
       return;
     }
-    if (!("method" in message)) {
+    const method = readString(message, "method");
+    if (!method) {
       return;
     }
-    if ("id" in message && message.id !== undefined) {
+    const id = readRpcId(message);
+    if (hasKey(message, "id") && id !== undefined) {
       void this.handleServerRequest({
-        id: message.id,
-        method: message.method,
-        params: message.params,
+        id,
+        method,
+        params: readJsonValue(message, "params"),
       });
       return;
     }
     this.handleNotification({
-      method: message.method,
-      params: message.params,
+      method,
+      params: readJsonValue(message, "params"),
     });
   }
 
-  private handleResponse(response: RpcResponse): void {
-    const pending = this.pending.get(response.id);
+  private handleResponse(response: object): void {
+    const id = readRpcId(response);
+    if (id === undefined) {
+      return;
+    }
+    const pending = this.pending.get(id);
     if (!pending) {
       return;
     }
-    this.pending.delete(response.id);
-    if (response.error) {
-      pending.reject(new CodexAppServerRpcError(response.error, pending.method));
+    this.pending.delete(id);
+    const error = readRpcError(response);
+    if (error) {
+      pending.reject(new CodexAppServerRpcError(error, pending.method));
       return;
     }
-    pending.resolve(response.result);
+    pending.resolve(readJsonValue(response, "result"));
   }
 
   private async handleServerRequest(
