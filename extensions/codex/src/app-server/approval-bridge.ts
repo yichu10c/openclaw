@@ -344,6 +344,15 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
   >;
   signal?: AbortSignal;
 }): Promise<ApprovalPolicyOutcome | undefined> {
+  if (
+    params.method === "item/commandExecution/requestApproval" &&
+    hasUnreadableCommandApprovalFields(params.requestParams)
+  ) {
+    return {
+      outcome: "denied",
+      reason: "Codex app-server command approval payload could not be inspected; refusing request.",
+    };
+  }
   const policyRequest = buildOpenClawToolPolicyRequest(params.method, params.requestParams);
   if (!policyRequest) {
     return undefined;
@@ -629,18 +638,28 @@ function stableJsonText(value: unknown): string | undefined {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    const items = value.map((item) => stableJsonText(item));
+    let items: Array<string | undefined>;
+    try {
+      items = value.map((item) => stableJsonText(item));
+    } catch {
+      return undefined;
+    }
     return items.every((item): item is string => item !== undefined)
       ? `[${items.join(",")}]`
       : undefined;
   }
   if (isPlainRecord(value)) {
-    const entries = Object.entries(value)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => {
-        const text = stableJsonText(item);
-        return text === undefined ? undefined : `${JSON.stringify(key)}:${text}`;
-      });
+    let entries: Array<string | undefined>;
+    try {
+      entries = Object.entries(value)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, item]) => {
+          const text = stableJsonText(item);
+          return text === undefined ? undefined : `${JSON.stringify(key)}:${text}`;
+        });
+    } catch {
+      return undefined;
+    }
     return entries.every((entry): entry is string => entry !== undefined)
       ? `{${entries.join(",")}}`
       : undefined;
@@ -687,13 +706,15 @@ function fileChangeApprovalDecision(outcome: AppServerApprovalOutcome): JsonValu
 }
 
 function requestedPermissions(requestParams: JsonObject | undefined): JsonObject {
-  const permissions = isJsonObject(requestParams?.permissions) ? requestParams.permissions : {};
+  const permissions = readJsonObject(requestParams, "permissions") ?? {};
   const granted: JsonObject = {};
-  if (isJsonObject(permissions.network)) {
-    granted.network = permissions.network;
+  const network = readJsonObject(permissions, "network");
+  if (network) {
+    granted.network = network;
   }
-  if (isJsonObject(permissions.fileSystem)) {
-    granted.fileSystem = permissions.fileSystem;
+  const fileSystem = readJsonObject(permissions, "fileSystem");
+  if (fileSystem) {
+    granted.fileSystem = fileSystem;
   }
   return granted;
 }
@@ -712,14 +733,12 @@ function describeRequestedPermissions(requestParams: JsonObject | undefined): st
 
 function describeCommandApprovalDetails(requestParams: JsonObject | undefined): string[] {
   const lines: string[] = [];
-  const additionalPermissions = isJsonObject(requestParams?.additionalPermissions)
-    ? requestParams.additionalPermissions
-    : undefined;
+  const additionalPermissions = readJsonObject(requestParams, "additionalPermissions");
   if (additionalPermissions) {
     lines.push(...describePermissionProfile(additionalPermissions, "Additional permissions"));
   }
   const execpolicySummary = summarizeStringArray(
-    requestParams?.proposedExecpolicyAmendment,
+    readValue(requestParams, "proposedExecpolicyAmendment"),
     "Proposed exec policy",
     sanitizePermissionScalar,
   );
@@ -727,7 +746,7 @@ function describeCommandApprovalDetails(requestParams: JsonObject | undefined): 
     lines.push(execpolicySummary);
   }
   const networkAmendmentSummary = summarizeNetworkPolicyAmendments(
-    requestParams?.proposedNetworkPolicyAmendments,
+    readValue(requestParams, "proposedNetworkPolicyAmendments"),
   );
   if (networkAmendmentSummary) {
     lines.push(networkAmendmentSummary);
@@ -739,20 +758,22 @@ function describePermissionProfile(permissions: JsonObject, label: string): stri
   const lines: string[] = [];
   const kinds: string[] = [];
   const risks = new Set<string>();
-  if (isJsonObject(permissions.network)) {
+  const network = readJsonObject(permissions, "network");
+  const fileSystem = readJsonObject(permissions, "fileSystem");
+  if (network) {
     kinds.push("network");
   }
-  if (isJsonObject(permissions.fileSystem)) {
+  if (fileSystem) {
     kinds.push("fileSystem");
   }
   if (kinds.length > 0) {
     lines.push(`${label}: ${kinds.join(", ")}`);
   }
   let networkSummary: string | undefined;
-  if (isJsonObject(permissions.network)) {
+  if (network) {
     const summaries = [
-      summarizeNetworkEnabledPermission(permissions.network, risks),
-      summarizePermissionRecord(permissions.network, risks, [
+      summarizeNetworkEnabledPermission(network, risks),
+      summarizePermissionRecord(network, risks, [
         {
           key: "allowHosts",
           label: "allowHosts",
@@ -764,9 +785,9 @@ function describePermissionProfile(permissions: JsonObject, label: string): stri
     networkSummary = summaries.length > 0 ? summaries.join("; ") : undefined;
   }
   let fileSystemSummary: string | undefined;
-  if (isJsonObject(permissions.fileSystem)) {
+  if (fileSystem) {
     const summaries = [
-      summarizePermissionRecord(permissions.fileSystem, risks, [
+      summarizePermissionRecord(fileSystem, risks, [
         {
           key: "read",
           label: "read",
@@ -798,7 +819,7 @@ function describePermissionProfile(permissions: JsonObject, label: string): stri
           risksFor: permissionPathRisks,
         },
       ]),
-      summarizeFileSystemEntries(permissions.fileSystem, risks),
+      summarizeFileSystemEntries(fileSystem, risks),
     ].filter((summary): summary is string => Boolean(summary));
     fileSystemSummary = summaries.length > 0 ? summaries.join("; ") : undefined;
   }
@@ -825,7 +846,7 @@ function summarizeNetworkEnabledPermission(
   permission: JsonObject,
   risks: Set<string>,
 ): string | undefined {
-  const enabled = permission.enabled;
+  const enabled = readValue(permission, "enabled");
   if (typeof enabled !== "boolean") {
     return undefined;
   }
@@ -839,28 +860,34 @@ function summarizeFileSystemEntries(
   permission: JsonObject,
   risks: Set<string>,
 ): string | undefined {
-  const entries = permission.entries;
+  const entries = readValue(permission, "entries");
   if (!Array.isArray(entries)) {
     return undefined;
   }
   const samples: string[] = [];
   let count = 0;
-  for (const entry of entries) {
-    const item = isJsonObject(entry) ? entry : undefined;
-    const path = typeof item?.path === "string" ? item.path.trim() : "";
-    const access = typeof item?.access === "string" ? item.access.trim() : "";
-    if (!path || !access) {
-      continue;
-    }
-    count += 1;
-    if (access !== "none") {
-      for (const risk of permissionPathRisks(path)) {
-        risks.add(risk);
+  try {
+    for (const entry of entries) {
+      const item = isJsonObject(entry) ? entry : undefined;
+      const rawPath = readValue(item, "path");
+      const rawAccess = readValue(item, "access");
+      const path = typeof rawPath === "string" ? rawPath.trim() : "";
+      const access = typeof rawAccess === "string" ? rawAccess.trim() : "";
+      if (!path || !access) {
+        continue;
+      }
+      count += 1;
+      if (access !== "none") {
+        for (const risk of permissionPathRisks(path)) {
+          risks.add(risk);
+        }
+      }
+      if (samples.length < PERMISSION_SAMPLE_LIMIT) {
+        samples.push(`${sanitizePermissionScalar(access)} ${sanitizePermissionPathValue(path)}`);
       }
     }
-    if (samples.length < PERMISSION_SAMPLE_LIMIT) {
-      samples.push(`${sanitizePermissionScalar(access)} ${sanitizePermissionPathValue(path)}`);
-    }
+  } catch {
+    return undefined;
   }
   if (count === 0) {
     return undefined;
@@ -912,17 +939,22 @@ function summarizePermissionArray(
 }
 
 function summarizeStringArray(
-  value: JsonValue | undefined,
+  value: unknown,
   label: string,
   sanitize: (value: string) => string,
 ): string | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const values = value
-    .filter((entry): entry is string => typeof entry === "string")
-    .map((entry) => sanitize(entry))
-    .filter(Boolean);
+  let values: string[];
+  try {
+    values = value
+      .filter((entry): entry is string => typeof entry === "string")
+      .map((entry) => sanitize(entry))
+      .filter(Boolean);
+  } catch {
+    return undefined;
+  }
   if (values.length === 0) {
     return undefined;
   }
@@ -932,23 +964,29 @@ function summarizeStringArray(
   return `${label}: ${samples.join(", ")}${remainderSuffix}`;
 }
 
-function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string | undefined {
+function summarizeNetworkPolicyAmendments(value: unknown): string | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
   const samples: string[] = [];
   let count = 0;
-  for (const entry of value) {
-    const amendment = isJsonObject(entry) ? entry : undefined;
-    const host = typeof amendment?.host === "string" ? amendment.host : "";
-    const action = typeof amendment?.action === "string" ? amendment.action : "";
-    if (!host || !action) {
-      continue;
+  try {
+    for (const entry of value) {
+      const amendment = isJsonObject(entry) ? entry : undefined;
+      const rawHost = readValue(amendment, "host");
+      const rawAction = readValue(amendment, "action");
+      const host = typeof rawHost === "string" ? rawHost : "";
+      const action = typeof rawAction === "string" ? rawAction : "";
+      if (!host || !action) {
+        continue;
+      }
+      count += 1;
+      if (samples.length < PERMISSION_SAMPLE_LIMIT) {
+        samples.push(`${sanitizePermissionScalar(action)} ${sanitizePermissionHostValue(host)}`);
+      }
     }
-    count += 1;
-    if (samples.length < PERMISSION_SAMPLE_LIMIT) {
-      samples.push(`${sanitizePermissionScalar(action)} ${sanitizePermissionHostValue(host)}`);
-    }
+  } catch {
+    return undefined;
   }
   if (count === 0) {
     return undefined;
@@ -959,7 +997,7 @@ function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string 
 }
 
 function readStringArray(record: JsonObject, key: string): string[] {
-  return normalizeTrimmedStringList(record[key]);
+  return normalizeTrimmedStringList(readValue(record, key));
 }
 
 function sanitizePermissionHostValue(value: string): string {
@@ -1036,42 +1074,54 @@ function isPrivateNetworkHostPattern(value: string): boolean {
 }
 
 function hasAvailableDecision(requestParams: JsonObject | undefined, decision: string): boolean {
-  const available = requestParams?.availableDecisions;
+  const available = readValue(requestParams, "availableDecisions");
   if (!Array.isArray(available)) {
     return true;
   }
-  return available.includes(decision);
+  try {
+    return available.includes(decision);
+  } catch {
+    return true;
+  }
 }
 
 function findAvailableCommandAmendmentDecision(
   requestParams: JsonObject | undefined,
 ): JsonValue | undefined {
-  const available = requestParams?.availableDecisions;
+  const available = readValue(requestParams, "availableDecisions");
   if (!Array.isArray(available)) {
     return undefined;
   }
-  return available.find(
-    (entry): entry is JsonObject =>
-      isJsonObject(entry) &&
-      (isJsonObject(entry.acceptWithExecpolicyAmendment) ||
-        isJsonObject(entry.applyNetworkPolicyAmendment)),
-  );
+  try {
+    return available.find(
+      (entry): entry is JsonObject =>
+        isJsonObject(entry) &&
+        (Boolean(readJsonObject(entry, "acceptWithExecpolicyAmendment")) ||
+          Boolean(readJsonObject(entry, "applyNetworkPolicyAmendment"))),
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 function commandRejectionDecision(
   requestParams: JsonObject | undefined,
   preferred: "decline" | "cancel",
 ): JsonValue {
-  const available = requestParams?.availableDecisions;
+  const available = readValue(requestParams, "availableDecisions");
   if (!Array.isArray(available)) {
     return preferred;
   }
-  if (available.includes(preferred)) {
+  try {
+    if (available.includes(preferred)) {
+      return preferred;
+    }
+    const alternate = preferred === "decline" ? "cancel" : "decline";
+    if (available.includes(alternate)) {
+      return alternate;
+    }
+  } catch {
     return preferred;
-  }
-  const alternate = preferred === "decline" ? "cancel" : "decline";
-  if (available.includes(alternate)) {
-    return alternate;
   }
   return preferred;
 }
@@ -1141,12 +1191,19 @@ function readDisplayCommandPreview(
 }
 
 function readPolicyCommand(record: JsonObject | undefined): string | undefined {
-  const command = record?.command;
+  const command = readValue(record, "command");
   if (typeof command === "string") {
     return command;
   }
-  if (Array.isArray(command) && command.every((part): part is string => typeof part === "string")) {
-    return command.join(" ");
+  try {
+    if (
+      Array.isArray(command) &&
+      command.every((part): part is string => typeof part === "string")
+    ) {
+      return command.join(" ");
+    }
+  } catch {
+    return undefined;
   }
   const actionCommands = readCommandActions(record);
   if (actionCommands.length > 0) {
@@ -1156,13 +1213,17 @@ function readPolicyCommand(record: JsonObject | undefined): string | undefined {
 }
 
 function readCommandActions(record: JsonObject | undefined): string[] {
-  const actions = record?.commandActions;
+  const actions = readValue(record, "commandActions");
   if (!Array.isArray(actions)) {
     return [];
   }
-  return actions
-    .map((action) => (isJsonObject(action) ? readString(action, "command") : undefined))
-    .filter((command): command is string => Boolean(command));
+  try {
+    return actions
+      .map((action) => (isJsonObject(action) ? readString(action, "command") : undefined))
+      .filter((command): command is string => Boolean(command));
+  } catch {
+    return [];
+  }
 }
 
 function readCommandActionsPreview(
@@ -1179,7 +1240,7 @@ function readCommandActionsPreview(
 }
 
 function readCommandPreview(record: JsonObject | undefined): ApprovalPreviewSource | undefined {
-  const command = record?.command;
+  const command = readValue(record, "command");
   if (typeof command === "string") {
     return previewSource(command);
   }
@@ -1187,16 +1248,62 @@ function readCommandPreview(record: JsonObject | undefined): ApprovalPreviewSour
     return undefined;
   }
   let source: ApprovalPreviewSource | undefined;
-  for (const part of command) {
-    if (typeof part !== "string") {
-      return undefined;
+  try {
+    for (const part of command) {
+      if (typeof part !== "string") {
+        return undefined;
+      }
+      source = appendPreviewPart(source, part, " ");
+      if (source.clipped) {
+        break;
+      }
     }
-    source = appendPreviewPart(source, part, " ");
-    if (source.clipped) {
-      break;
-    }
+  } catch {
+    return undefined;
   }
   return source;
+}
+
+function hasUnreadableCommandApprovalFields(record: JsonObject | undefined): boolean {
+  const command = readValueResult(record, "command");
+  if (!command.ok || commandArrayHasUnreadableEntries(command.value)) {
+    return true;
+  }
+  const commandActions = readValueResult(record, "commandActions");
+  if (!commandActions.ok) {
+    return true;
+  }
+  return commandActionsArrayHasUnreadableEntries(commandActions.value);
+}
+
+function commandArrayHasUnreadableEntries(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  try {
+    for (const part of value) {
+      void part;
+    }
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function commandActionsArrayHasUnreadableEntries(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  try {
+    for (const action of value) {
+      if (isJsonObject(action) && !readValueResult(action, "command").ok) {
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 function readStringPreview(
@@ -1208,8 +1315,29 @@ function readStringPreview(
 }
 
 function readString(record: JsonObject | undefined, key: string): string | undefined {
-  const value = record?.[key];
+  const value = readValue(record, key);
   return typeof value === "string" ? value : undefined;
+}
+
+function readJsonObject(record: JsonObject | undefined, key: string): JsonObject | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readValue(record: JsonObject | undefined, key: string): unknown {
+  const result = readValueResult(record, key);
+  return result.ok ? result.value : undefined;
+}
+
+function readValueResult(
+  record: JsonObject | undefined,
+  key: string,
+): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: record?.[key] };
+  } catch {
+    return { ok: false };
+  }
 }
 
 function truncate(value: string, maxLength: number): string {

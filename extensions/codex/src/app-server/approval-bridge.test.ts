@@ -174,6 +174,164 @@ describe("Codex app-server approval bridge", () => {
     });
   });
 
+  it("ignores unreadable synthetic approval routing fields without throwing", async () => {
+    const params = createParams();
+    const requestParams: Record<string, unknown> = {
+      turnId: "turn-1",
+    };
+    Object.defineProperty(requestParams, "threadId", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin approval read failed");
+      },
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/permissions/requestApproval",
+      requestParams: requestParams as never,
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+    });
+
+    expect(result).toBeUndefined();
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes unreadable synthetic permission approval fields without throwing", async () => {
+    const params = createParams();
+    const requestParams: Record<string, unknown> = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "perm-unreadable",
+    };
+    Object.defineProperty(requestParams, "permissions", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin permissions read failed");
+      },
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/permissions/requestApproval",
+      requestParams: requestParams as never,
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+    });
+
+    expect(result).toEqual({ permissions: {}, scope: "session" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "approved",
+      message: "Codex app-server approval auto-approved by runtime policy.",
+    });
+  });
+
+  it("denies unreadable synthetic approval policy rewrites without throwing", async () => {
+    const params = createParams();
+    const rewrittenParams: Record<string, unknown> = {};
+    Object.defineProperty(rewrittenParams, "command", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin policy rewrite read failed");
+      },
+    });
+    mockRunBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: false,
+      params: rewrittenParams,
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-unreadable",
+        command: "fuzz status",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    findApprovalEvent(params, {
+      status: "denied",
+      message:
+        "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+    });
+  });
+
+  it("denies unreadable synthetic command approvals before policy hooks", async () => {
+    const params = createParams();
+    const requestParams: Record<string, unknown> = {
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "cmd-unreadable-command",
+    };
+    Object.defineProperty(requestParams, "command", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin command read failed");
+      },
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: requestParams as never,
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message:
+        "Codex app-server command approval payload could not be inspected; refusing request.",
+    });
+  });
+
+  it("denies unreadable synthetic command approval arrays before policy hooks", async () => {
+    const params = createParams();
+    const command: unknown[] = ["fuzz"];
+    Object.defineProperty(command, "1", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin command array read failed");
+      },
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-array-unreadable",
+        command,
+      } as never,
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      autoApprove: true,
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockRunBeforeToolCallHook).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message:
+        "Codex app-server command approval payload could not be inspected; refusing request.",
+    });
+  });
+
   it("routes command approvals through plugin approvals and accepts allowed commands", async () => {
     const params = createParams();
     mockCallGatewayTool
