@@ -40,6 +40,45 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function hasOwnRecordProperty(record: Record<string, unknown>, key: string): boolean {
+  try {
+    return Object.prototype.hasOwnProperty.call(record, key);
+  } catch {
+    return false;
+  }
+}
+
+function readRecordProperty(record: Record<string, unknown>, key: string): unknown {
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readableRecordEntries(record: Record<string, unknown>): Array<[string, unknown]> {
+  let keys: string[];
+  try {
+    keys = Object.keys(record);
+  } catch {
+    return [];
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, record[key]]);
+    } catch {
+      // Treat unreadable app-server fields as absent so validators can reject
+      // malformed payloads normally instead of crashing before validation.
+    }
+  }
+  return entries;
+}
+
+function cloneReadableRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(readableRecordEntries(record));
+}
+
 const schemaMapKeywords = new Set([
   "$defs",
   "definitions",
@@ -107,10 +146,14 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
 }
 
 function readDefault(schema: unknown): unknown {
-  if (!isRecord(schema) || !Object.prototype.hasOwnProperty.call(schema, "default")) {
+  if (!isRecord(schema) || !hasOwnRecordProperty(schema, "default")) {
     return undefined;
   }
-  return structuredClone(schema.default);
+  try {
+    return structuredClone(readRecordProperty(schema, "default"));
+  } catch {
+    return undefined;
+  }
 }
 
 function decodePointerSegment(segment: string): string {
@@ -309,15 +352,15 @@ function normalizeTurn(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return value;
   }
+  const record = value as Record<string, unknown>;
+  const items = readRecordProperty(record, "items");
   return {
     error: null,
     startedAt: null,
     completedAt: null,
     durationMs: null,
-    ...value,
-    items: Array.isArray((value as { items?: unknown }).items)
-      ? (value as { items: unknown[] }).items.map(normalizeThreadItem)
-      : [],
+    ...cloneReadableRecord(record),
+    items: Array.isArray(items) ? items.map(normalizeThreadItem) : [],
   };
 }
 
@@ -325,14 +368,15 @@ function normalizeThreadItem(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return value;
   }
-  const item = value as { type?: unknown };
-  switch (item.type) {
+  const record = value as Record<string, unknown>;
+  const normalized = cloneReadableRecord(record);
+  switch (readRecordProperty(record, "type")) {
     case "agentMessage":
-      return { phase: null, memoryCitation: null, ...value };
+      return { phase: null, memoryCitation: null, ...normalized };
     case "plan":
-      return { text: "", ...value };
+      return { text: "", ...normalized };
     case "reasoning":
-      return { summary: [], content: [], ...value };
+      return { summary: [], content: [], ...normalized };
     case "dynamicToolCall":
       return {
         namespace: null,
@@ -341,47 +385,52 @@ function normalizeThreadItem(value: unknown): unknown {
         contentItems: null,
         success: null,
         durationMs: null,
-        ...value,
+        ...normalized,
       };
     default:
-      return value;
+      return normalized;
   }
 }
 
 function normalizeThreadResponse(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("thread" in value)) {
+  if (!isRecord(value) || !hasOwnRecordProperty(value, "thread")) {
     return value;
   }
-  const thread = (value as { thread?: unknown }).thread;
-  if (thread && typeof thread === "object" && !Array.isArray(thread)) {
-    const t = thread as { id?: string; sessionId?: string };
-    if (typeof t.id === "string" && typeof t.sessionId !== "string") {
-      return { ...value, thread: { ...thread, sessionId: t.id } };
+  const normalized = cloneReadableRecord(value);
+  const thread = readRecordProperty(value, "thread");
+  if (isRecord(thread)) {
+    const normalizedThread = cloneReadableRecord(thread);
+    const id = readRecordProperty(thread, "id");
+    const sessionId = readRecordProperty(thread, "sessionId");
+    if (typeof id === "string" && typeof sessionId !== "string") {
+      return { ...normalized, thread: { ...normalizedThread, sessionId: id } };
     }
-    if (typeof t.sessionId === "string" && typeof t.id !== "string") {
-      return { ...value, thread: { ...thread, id: t.sessionId } };
+    if (typeof sessionId === "string" && typeof id !== "string") {
+      return { ...normalized, thread: { ...normalizedThread, id: sessionId } };
     }
   }
-  return value;
+  return normalized;
 }
 
 function normalizeTurnStartResponse(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
+  if (!isRecord(value) || !hasOwnRecordProperty(value, "turn")) {
     return value;
   }
+  const normalized = cloneReadableRecord(value);
   return {
-    ...value,
-    turn: normalizeTurn((value as { turn?: unknown }).turn),
+    ...normalized,
+    turn: normalizeTurn(readRecordProperty(value, "turn")),
   };
 }
 
 function normalizeTurnCompletedNotification(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("turn" in value)) {
+  if (!isRecord(value) || !hasOwnRecordProperty(value, "turn")) {
     return value;
   }
+  const normalized = cloneReadableRecord(value);
   return {
-    ...value,
-    turn: normalizeTurn((value as { turn?: unknown }).turn),
+    ...normalized,
+    turn: normalizeTurn(readRecordProperty(value, "turn")),
   };
 }
 
