@@ -311,8 +311,17 @@ function toTrajectoryToolDefinitions(
 }
 
 function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
-  if (value == null || typeof value === "boolean" || typeof value === "number") {
+  if (value == null || typeof value === "boolean") {
     return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "bigint") {
+    if (SENSITIVE_FIELD_RE.test(key)) {
+      return "<redacted>";
+    }
+    return value.toString();
   }
   if (typeof value === "string") {
     if (SENSITIVE_FIELD_RE.test(key)) {
@@ -327,20 +336,44 @@ function sanitizeValue(value: unknown, depth = 0, key = ""): unknown {
     const redacted = redactSensitiveString(value);
     return redacted.length > 20_000 ? `${redacted.slice(0, 20_000)}…` : redacted;
   }
+  if (typeof value === "function" || typeof value === "symbol" || value === undefined) {
+    return undefined;
+  }
   if (depth >= 6) {
     return "<truncated>";
   }
   if (Array.isArray(value)) {
-    return value.slice(0, 100).map((entry) => sanitizeValue(entry, depth + 1, key));
-  }
-  if (typeof value === "object") {
-    const next: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value).slice(0, 100)) {
-      next[key] = sanitizeValue(child, depth + 1, key);
+    const next: unknown[] = [];
+    for (let index = 0; index < Math.min(value.length, 100); index += 1) {
+      try {
+        next.push(sanitizeValue(value[index], depth + 1, key));
+      } catch {
+        next.push("<unreadable>");
+      }
     }
     return next;
   }
-  return JSON.stringify(value);
+  if (typeof value === "object") {
+    const next: Record<string, unknown> = {};
+    let entries: [string, unknown][];
+    try {
+      entries = Object.entries(value).slice(0, 100);
+    } catch {
+      return "<unreadable>";
+    }
+    for (const [key, child] of entries) {
+      try {
+        const sanitized = sanitizeValue(child, depth + 1, key);
+        if (sanitized !== undefined) {
+          next[key] = sanitized;
+        }
+      } catch {
+        next[key] = "<unreadable>";
+      }
+    }
+    return next;
+  }
+  return undefined;
 }
 
 function redactSensitiveString(value: string): string {

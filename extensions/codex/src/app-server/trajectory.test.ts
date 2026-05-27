@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createCodexTrajectoryRecorder,
+  recordCodexTrajectoryContext,
   resolveCodexTrajectoryAppendFlags,
   resolveCodexTrajectoryPointerFlags,
 } from "./trajectory.js";
@@ -201,5 +202,113 @@ describe("Codex trajectory recorder", () => {
     ) as { data?: { truncated?: boolean; reason?: string } };
     expect(parsed.data?.truncated).toBe(true);
     expect(parsed.data?.reason).toBe("trajectory-event-size-limit");
+  });
+
+  it("records non-JSON-compatible synthetic tool schema metadata without throwing", async () => {
+    const tmpDir = makeTempDir();
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt: {
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        model: { api: "responses" },
+        prompt: "inspect fuzzplugin",
+      } as never,
+      env: {},
+    });
+    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
+
+    const schema: Record<string, unknown> = {
+      type: "object",
+      properties: {
+        angle: {
+          const: 1n,
+          apiKey: 123n,
+          marker: Symbol("fuzzplugin"),
+          validate: () => true,
+          score: Number.POSITIVE_INFINITY,
+        },
+      },
+    };
+    schema.self = schema;
+    expect(() =>
+      recordCodexTrajectoryContext(trajectoryRecorder, {
+        cwd: tmpDir,
+        attempt: {
+          sessionFile: path.join(tmpDir, "session.jsonl"),
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          runId: "run-1",
+          model: { api: "responses" },
+          prompt: "inspect fuzzplugin",
+        } as never,
+        tools: [
+          {
+            name: "fuzz_move_angles",
+            description: "move synthetic angles",
+            inputSchema: schema,
+          },
+        ],
+      }),
+    ).not.toThrow();
+    await trajectoryRecorder.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    ) as {
+      data?: {
+        tools?: Array<{
+          parameters?: {
+            properties?: {
+              angle?: Record<string, unknown>;
+            };
+            self?: unknown;
+          };
+        }>;
+      };
+    };
+    const parameters = parsed.data?.tools?.[0]?.parameters;
+    expect(parameters?.properties?.angle).toEqual({
+      apiKey: "<redacted>",
+      const: "1",
+      score: null,
+    });
+    const serializedParameters = JSON.stringify(parameters);
+    expect(serializedParameters).toContain("<truncated>");
+    expect(serializedParameters).not.toContain("marker");
+    expect(serializedParameters).not.toContain("validate");
+  });
+
+  it("records unreadable synthetic trajectory payload fields without throwing", async () => {
+    const tmpDir = makeTempDir();
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt: {
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        model: { api: "responses" },
+      } as never,
+      env: {},
+    });
+    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
+    const payload: Record<string, unknown> = {};
+    Object.defineProperty(payload, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trajectory read failed");
+      },
+    });
+
+    expect(() => trajectoryRecorder.recordEvent("fuzzplugin.payload", payload)).not.toThrow();
+    await trajectoryRecorder.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    ) as { data?: unknown };
+    expect(parsed.data).toBe("<unreadable>");
   });
 });
