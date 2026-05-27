@@ -1565,7 +1565,7 @@ export class CodexAppServerEventProjector {
 
   private isHookNotificationForCurrentThread(params: JsonObject): boolean {
     const threadId = readString(params, "threadId");
-    const turnId = params.turnId;
+    const turnId = readValue(params, "turnId");
     return threadId === this.threadId && (turnId === this.turnId || turnId === null);
   }
 }
@@ -1579,7 +1579,7 @@ function readNotificationTurnId(record: JsonObject): string | undefined {
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
+  const value = readValue(record, key);
   return typeof value === "string" ? value : undefined;
 }
 
@@ -1591,11 +1591,11 @@ function normalizeNonEmptyString(value: unknown): string | undefined {
 }
 
 function readNonEmptyString(record: JsonObject, key: string): string | undefined {
-  return normalizeNonEmptyString(record[key]);
+  return normalizeNonEmptyString(readValue(record, key));
 }
 
 function readNonEmptyStringArray(record: JsonObject, key: string): string[] {
-  const value = record[key];
+  const value = readValue(record, key);
   if (!Array.isArray(value)) {
     return [];
   }
@@ -1610,7 +1610,7 @@ function readNonEmptyStringArray(record: JsonObject, key: string): string[] {
 }
 
 function readNullableString(record: JsonObject, key: string): string | null | undefined {
-  const value = record[key];
+  const value = readValue(record, key);
   if (value === null) {
     return null;
   }
@@ -1618,7 +1618,7 @@ function readNullableString(record: JsonObject, key: string): string | null | un
 }
 
 function readNumber(record: JsonObject, key: string): number | undefined {
-  const value = record[key];
+  const value = readValue(record, key);
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
@@ -1628,7 +1628,7 @@ function readNonNegativeInteger(record: JsonObject, key: string): number | undef
 }
 
 function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  const value = record[key];
+  const value = readValue(record, key);
   return typeof value === "boolean" ? value : undefined;
 }
 
@@ -1643,7 +1643,7 @@ function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean 
 }
 
 function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
-  const error = record.error;
+  const error = readValue(record, "error");
   if (isJsonObject(error)) {
     return readString(error, "message") ?? readString(error, "error");
   }
@@ -1671,7 +1671,7 @@ function readHookOutputEntries(
 
 function readFirstJsonObject(record: JsonObject, keys: readonly string[]): JsonObject | undefined {
   for (const key of keys) {
-    const value = record[key];
+    const value = readValue(record, key);
     if (isJsonObject(value)) {
       return value;
     }
@@ -1687,6 +1687,14 @@ function readNumberAlias(record: JsonObject, keys: readonly string[]): number | 
     }
   }
   return undefined;
+}
+
+function readValue(record: JsonObject, key: string): unknown {
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeCodexTokenUsage(record: JsonObject): ReturnType<typeof normalizeUsage> {

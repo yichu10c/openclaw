@@ -144,6 +144,15 @@ function requireArray(value: unknown, label: string): unknown[] {
   return value;
 }
 
+function defineThrowingProperty(target: object, key: string, message: string): void {
+  Object.defineProperty(target, key, {
+    enumerable: true,
+    get() {
+      throw new Error(message);
+    },
+  });
+}
+
 function expectUsageFields(
   usage: unknown,
   expected: { input: number; output: number; cacheRead: number; total: number },
@@ -3100,5 +3109,25 @@ describe("CodexAppServerEventProjector", () => {
     expect(started.hookRunId).toBe("hook-thread-1");
     expect(started.eventName).toBe("sessionStart");
     expect(started.scope).toBe("thread");
+  });
+
+  it("ignores unreadable synthetic hook routing fields without throwing", async () => {
+    const onAgentEvent = vi.fn();
+    const params = await createParams();
+    const projector = await createProjector({ ...params, onAgentEvent });
+    const notificationParams = { turnId: TURN_ID };
+    defineThrowingProperty(
+      notificationParams,
+      "threadId",
+      "fuzzplugin hook notification read failed",
+    );
+
+    await expect(
+      projector.handleNotification({
+        method: "hook/started",
+        params: notificationParams,
+      } as ProjectorNotification),
+    ).resolves.toBeUndefined();
+    expect(onAgentEvent).not.toHaveBeenCalled();
   });
 });
