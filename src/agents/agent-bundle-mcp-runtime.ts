@@ -14,6 +14,7 @@ import { Compile } from "typebox/compile";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { describeNonJsonCompatibleValue } from "../shared/json-compatible.js";
 import {
   findJsonSchemaShapeError,
   normalizeJsonSchemaForTypeBox,
@@ -141,6 +142,10 @@ export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
     getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
       if (!isDraft202012Schema(schema)) {
         return defaultValidator.getValidator<T>(schema);
+      }
+      const jsonIssue = describeNonJsonCompatibleValue(schema, "<schema>");
+      if (jsonIssue) {
+        throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${jsonIssue}`);
       }
       const schemaError = findJsonSchemaShapeError(schema as never);
       if (schemaError) {
