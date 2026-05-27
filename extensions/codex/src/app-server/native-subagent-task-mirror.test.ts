@@ -13,6 +13,16 @@ function createRuntime() {
   } as unknown as TaskLifecycleRuntime;
 }
 
+function defineThrowingProperty(record: Record<string, unknown>, key: string, message: string) {
+  Object.defineProperty(record, key, {
+    enumerable: true,
+    get() {
+      throw new Error(message);
+    },
+  });
+  return record;
+}
+
 describe("CodexNativeSubagentTaskMirror", () => {
   it("creates a silent task-registry task for a native Codex subagent thread", () => {
     const runtime = createRuntime();
@@ -621,5 +631,96 @@ describe("CodexNativeSubagentTaskMirror", () => {
       progressSummary: "done",
       terminalSummary: "done",
     });
+  });
+
+  it("ignores unreadable synthetic task mirror notification fields", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:main",
+      },
+      runtime,
+    );
+
+    mirror.handleNotification({
+      method: "thread/started",
+      params: defineThrowingProperty({}, "thread", "fuzzplugin task thread read failed") as never,
+    });
+    mirror.handleNotification({
+      method: "thread/status/changed",
+      params: defineThrowingProperty({}, "status", "mockplugin task status read failed") as never,
+    });
+    mirror.handleNotification({
+      method: "item/completed",
+      params: defineThrowingProperty({}, "item", "fuzzplugin task item read failed") as never,
+    });
+    mirror.handleNotification({
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          tool: "wait",
+          senderThreadId: "parent-thread",
+          agentsStates: defineThrowingProperty(
+            {},
+            "child-thread",
+            "mockplugin task agent state read failed",
+          ) as never,
+        },
+      } as never,
+    });
+    mirror.handleNotification(
+      defineThrowingProperty(
+        { method: "thread/started" },
+        "params",
+        "fuzzplugin task params read failed",
+      ) as never,
+    );
+
+    expect(runtime.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(runtime.recordTaskRunProgressByRunId).not.toHaveBeenCalled();
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
+  it("ignores unreadable synthetic thread-started status fields", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:main",
+      },
+      runtime,
+    );
+
+    mirror.handleNotification({
+      method: "thread/started",
+      params: {
+        thread: {
+          id: "child-thread",
+          status: defineThrowingProperty(
+            {},
+            "type",
+            "fuzzplugin task status type read failed",
+          ) as never,
+          source: {
+            subAgent: {
+              thread_spawn: {
+                parent_thread_id: "parent-thread",
+                depth: 1,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+      }),
+    );
+    expect(runtime.recordTaskRunProgressByRunId).not.toHaveBeenCalled();
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
   });
 });

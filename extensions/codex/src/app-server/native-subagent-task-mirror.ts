@@ -2,14 +2,12 @@ import type { AgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-
 import { CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX } from "./native-subagent-task-ids.js";
 import type {
   CodexServerNotification,
-  CodexSessionSource,
   CodexSubAgentThreadSpawnSource,
   CodexThread,
   CodexThreadStartedNotification,
   CodexThreadStatus,
   CodexThreadStatusChangedNotification,
   JsonObject,
-  JsonValue,
 } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
@@ -38,7 +36,7 @@ export class CodexNativeSubagentTaskMirror {
   }
 
   handleNotification(notification: CodexServerNotification): void {
-    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    const params = readJsonObject(notification, "params");
     if (!params) {
       return;
     }
@@ -61,26 +59,29 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const thread = notification.thread;
-    const spawn = readSubagentThreadSpawnSource(thread.source, this.params.parentThreadId);
+    const spawn = readSubagentThreadSpawnSource(
+      readValue(thread, "source"),
+      this.params.parentThreadId,
+    );
     if (!spawn) {
       return;
     }
-    const threadId = thread.id.trim();
+    const threadId = readString(thread, "id")?.trim() ?? "";
     if (!threadId || this.mirroredThreadIds.has(threadId)) {
       return;
     }
     this.mirroredThreadIds.add(threadId);
     const runId = codexNativeSubagentRunId(threadId);
     const label =
-      trimOptional(spawn.agent_nickname) ??
-      trimOptional(thread.agentNickname) ??
-      trimOptional(spawn.agent_role) ??
-      trimOptional(thread.agentRole) ??
+      trimOptional(readString(spawn, "agent_nickname")) ??
+      trimOptional(readString(thread, "agentNickname")) ??
+      trimOptional(readString(spawn, "agent_role")) ??
+      trimOptional(readString(thread, "agentRole")) ??
       "Codex subagent";
     const task =
-      trimOptional(thread.preview) ??
+      trimOptional(readString(thread, "preview")) ??
       `Codex native subagent${label === "Codex subagent" ? "" : ` ${label}`}`;
-    const createdAt = secondsToMillis(thread.createdAt) ?? this.now();
+    const createdAt = secondsToMillis(readValue(thread, "createdAt")) ?? this.now();
     this.runtime.createRunningTaskRun({
       sourceId: runId,
       agentId: this.params.agentId,
@@ -94,7 +95,7 @@ export class CodexNativeSubagentTaskMirror {
       lastEventAt: this.now(),
       progressSummary: "Codex native subagent started.",
     });
-    this.applyStatus(threadId, thread.status);
+    this.applyStatus(threadId, readJsonObject(thread, "status") as CodexThreadStatus | undefined);
   }
 
   private handleThreadStatusChanged(params: JsonObject): void {
@@ -106,8 +107,11 @@ export class CodexNativeSubagentTaskMirror {
   }
 
   private applyStatus(threadId: string, status: CodexThreadStatus | null | undefined): void {
-    const statusType = status?.type;
-    if (!statusType) {
+    if (!status || typeof status !== "object") {
+      return;
+    }
+    const statusType = readValue(status, "type");
+    if (!isCodexThreadStatusType(statusType)) {
       return;
     }
     const runId = codexNativeSubagentRunId(threadId);
@@ -158,7 +162,7 @@ export class CodexNativeSubagentTaskMirror {
   }
 
   private handleCollabAgentItem(params: JsonObject): void {
-    const item = isJsonObject(params.item) ? params.item : undefined;
+    const item = readJsonObject(params, "item");
     if (!item || readString(item, "type") !== "collabAgentToolCall") {
       return;
     }
@@ -167,8 +171,8 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     const isSpawnAgentTool = normalizeToolName(readString(item, "tool")) === "spawnagent";
-    const receiverThreadIds = readStringArray(item.receiverThreadIds);
-    const agentsStates = readAgentsStates(item.agentsStates);
+    const receiverThreadIds = readStringArray(readValue(item, "receiverThreadIds"));
+    const agentsStates = readAgentsStates(readValue(item, "agentsStates"));
     const spawnChildThreadIds = new Set([...receiverThreadIds, ...agentsStates.keys()]);
     if (isSpawnAgentTool) {
       for (const childThreadId of spawnChildThreadIds) {
@@ -306,28 +310,28 @@ export function codexNativeSubagentRunId(threadId: string): string {
 }
 
 export function readSubagentThreadSpawnSource(
-  source: CodexSessionSource | null | undefined,
+  source: unknown,
   parentThreadId: string,
 ): CodexSubAgentThreadSpawnSource | undefined {
-  if (!source || typeof source !== "object" || !("subAgent" in source)) {
+  const sourceObject = isJsonObject(source) ? source : undefined;
+  const subAgent = sourceObject ? readJsonObject(sourceObject, "subAgent") : undefined;
+  if (!subAgent) {
     return undefined;
   }
-  const subAgent = source.subAgent;
-  if (!subAgent || typeof subAgent !== "object" || !("thread_spawn" in subAgent)) {
+  const spawn = readJsonObject(subAgent, "thread_spawn");
+  if (!spawn) {
     return undefined;
   }
-  const spawn = subAgent.thread_spawn;
-  if (!spawn || typeof spawn !== "object") {
-    return undefined;
-  }
-  return spawn.parent_thread_id === parentThreadId ? spawn : undefined;
+  return readString(spawn, "parent_thread_id") === parentThreadId
+    ? (spawn as CodexSubAgentThreadSpawnSource)
+    : undefined;
 }
 
 function readThreadStartedNotification(
   params: JsonObject,
 ): CodexThreadStartedNotification | undefined {
-  const thread = params.thread;
-  if (!isJsonObject(thread) || typeof thread.id !== "string") {
+  const thread = readJsonObject(params, "thread");
+  if (!thread || !readString(thread, "id")) {
     return undefined;
   }
   return { thread: thread as CodexThread };
@@ -336,15 +340,16 @@ function readThreadStartedNotification(
 function readThreadStatusChangedNotification(
   params: JsonObject,
 ): CodexThreadStatusChangedNotification | undefined {
-  if (typeof params.threadId !== "string") {
+  const threadId = readString(params, "threadId");
+  if (!threadId) {
     return undefined;
   }
-  const status = params.status;
-  if (!isJsonObject(status) || !isCodexThreadStatusType(status.type)) {
+  const status = readJsonObject(params, "status");
+  if (!status || !isCodexThreadStatusType(readValue(status, "type"))) {
     return undefined;
   }
   return {
-    threadId: params.threadId,
+    threadId,
     status: status as CodexThreadStatus,
   };
 }
@@ -354,13 +359,10 @@ function isCodexThreadStatusType(value: unknown): value is CodexThreadStatus["ty
 }
 
 function readAgentsStates(
-  value: JsonValue | undefined,
+  value: unknown,
 ): Map<string, { status?: string; message?: string | null }> {
   const states = new Map<string, { status?: string; message?: string | null }>();
-  if (!isJsonObject(value)) {
-    return states;
-  }
-  for (const [threadId, rawState] of Object.entries(value)) {
+  for (const [threadId, rawState] of readObjectEntries(value)) {
     if (!isJsonObject(rawState)) {
       continue;
     }
@@ -371,7 +373,7 @@ function readAgentsStates(
   return states;
 }
 
-function readStringArray(value: JsonValue | undefined): string[] {
+function readStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
@@ -379,13 +381,37 @@ function readStringArray(value: JsonValue | undefined): string[] {
 }
 
 function readString(value: JsonObject, key: string): string | undefined {
-  const entry = value[key];
+  const entry = readValue(value, key);
   return typeof entry === "string" ? entry : undefined;
 }
 
 function readNullableString(value: JsonObject, key: string): string | null | undefined {
-  const entry = value[key];
+  const entry = readValue(value, key);
   return typeof entry === "string" || entry === null ? entry : undefined;
+}
+
+function readJsonObject(record: object, key: string): JsonObject | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readObjectEntries(value: unknown): Array<[string, unknown]> {
+  if (!isJsonObject(value)) {
+    return [];
+  }
+  try {
+    return Object.entries(value);
+  } catch {
+    return [];
+  }
+}
+
+function readValue(record: object, key: string): unknown {
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeToolName(value: string | undefined): string | undefined {
@@ -447,7 +473,7 @@ function normalizeAgentStateStatus(value: string | undefined): string | undefine
   return value?.trim();
 }
 
-function secondsToMillis(value: number | null | undefined): number | undefined {
+function secondsToMillis(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
