@@ -21,13 +21,14 @@ const CODEX_INTERRUPTED_DEVELOPER_GUIDANCE =
 export function describeNotificationActivity(
   notification: CodexServerNotification,
 ): Record<string, unknown> | undefined {
-  if (!isJsonObject(notification.params)) {
+  const params = readJsonObject(notification, "params");
+  if (!params) {
     return { lastNotificationMethod: notification.method };
   }
   if (notification.method !== "rawResponseItem/completed") {
     return { lastNotificationMethod: notification.method };
   }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  const item = readJsonObject(params, "item");
   if (!item) {
     return { lastNotificationMethod: notification.method };
   }
@@ -59,13 +60,14 @@ export function updateActiveTurnItemIds(
 }
 
 function isCompletedAssistantNotification(notification: CodexServerNotification): boolean {
-  if (!isJsonObject(notification.params)) {
+  const params = readJsonObject(notification, "params");
+  if (!params) {
     return false;
   }
   if (notification.method !== "item/completed") {
     return false;
   }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  const item = readJsonObject(params, "item");
   return Boolean(
     item &&
     readString(item, "type") === "agentMessage" &&
@@ -76,20 +78,22 @@ function isCompletedAssistantNotification(notification: CodexServerNotification)
 export function isReasoningItemCompletionNotification(
   notification: CodexServerNotification,
 ): boolean {
-  if (!isJsonObject(notification.params) || notification.method !== "item/completed") {
+  const params = readJsonObject(notification, "params");
+  if (!params || notification.method !== "item/completed") {
     return false;
   }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  const item = readJsonObject(params, "item");
   return item ? readString(item, "type") === "reasoning" : false;
 }
 
 export function isRawReasoningCompletionNotification(
   notification: CodexServerNotification,
 ): boolean {
-  if (!isJsonObject(notification.params) || notification.method !== "rawResponseItem/completed") {
+  const params = readJsonObject(notification, "params");
+  if (!params || notification.method !== "rawResponseItem/completed") {
     return false;
   }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  const item = readJsonObject(params, "item");
   return item ? readString(item, "type") === "reasoning" : false;
 }
 
@@ -106,7 +110,7 @@ export function isAssistantCompletionReleaseNotification(
 export function shouldDisarmAssistantCompletionIdleWatch(
   notification: CodexServerNotification,
 ): boolean {
-  if (!isJsonObject(notification.params)) {
+  if (!readJsonObject(notification, "params")) {
     return false;
   }
   if (notification.method === "item/started") {
@@ -119,14 +123,15 @@ export function shouldDisarmAssistantCompletionIdleWatch(
 }
 
 export function readNotificationItemId(notification: CodexServerNotification): string | undefined {
-  if (!isJsonObject(notification.params)) {
+  const params = readJsonObject(notification, "params");
+  if (!params) {
     return undefined;
   }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  const item = readJsonObject(params, "item");
   return (
     (item ? readString(item, "id") : undefined) ??
-    readString(notification.params, "itemId") ??
-    readString(notification.params, "id")
+    readString(params, "itemId") ??
+    readString(params, "id")
   );
 }
 
@@ -134,14 +139,15 @@ export function isPendingOpenClawDynamicToolCompletionNotification(
   notification: CodexServerNotification,
   pendingOpenClawDynamicToolCompletionIds: ReadonlySet<string>,
 ): boolean {
-  if (notification.method !== "item/completed" || !isJsonObject(notification.params)) {
+  const params = readJsonObject(notification, "params");
+  if (notification.method !== "item/completed" || !params) {
     return false;
   }
   const itemId = readNotificationItemId(notification);
   if (!itemId || !pendingOpenClawDynamicToolCompletionIds.has(itemId)) {
     return false;
   }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  const item = readJsonObject(params, "item");
   const itemType = item ? readString(item, "type") : undefined;
   return itemType === undefined || itemType === "dynamicToolCall";
 }
@@ -149,10 +155,11 @@ export function isPendingOpenClawDynamicToolCompletionNotification(
 export function isRawToolOutputCompletionNotification(
   notification: CodexServerNotification,
 ): boolean {
-  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+  const params = readJsonObject(notification, "params");
+  if (notification.method !== "rawResponseItem/completed" || !params) {
     return false;
   }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  const item = readJsonObject(params, "item");
   return item ? readString(item, "type") === "custom_tool_call_output" : false;
 }
 
@@ -164,10 +171,11 @@ export function isNativeToolProgressNotification(notification: CodexServerNotifi
   ) {
     return false;
   }
-  if (!isJsonObject(notification.params)) {
+  const params = readJsonObject(notification, "params");
+  if (!params) {
     return false;
   }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  const item = readJsonObject(params, "item");
   switch (item ? readString(item, "type") : undefined) {
     case "commandExecution":
     case "fileChange":
@@ -182,10 +190,11 @@ export function isNativeToolProgressNotification(notification: CodexServerNotifi
 export function isRawAssistantCompletionNotification(
   notification: CodexServerNotification,
 ): boolean {
-  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+  const params = readJsonObject(notification, "params");
+  if (notification.method !== "rawResponseItem/completed" || !params) {
     return false;
   }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  const item = readJsonObject(params, "item");
   return Boolean(
     item &&
     readString(item, "type") === "message" &&
@@ -196,10 +205,11 @@ export function isRawAssistantCompletionNotification(
 }
 
 function readRawAssistantTextPreview(item: JsonObject): string | undefined {
-  if (readString(item, "role") !== "assistant" || !Array.isArray(item.content)) {
+  const content = readValue(item, "content");
+  if (readString(item, "role") !== "assistant" || !Array.isArray(content)) {
     return undefined;
   }
-  const text = item.content
+  const text = content
     .flatMap((content) => {
       if (!isJsonObject(content)) {
         return [];
@@ -268,7 +278,7 @@ export function isCurrentThreadOptionalTurnRequestParams(
   if (!isJsonObject(value) || readString(value, "threadId") !== threadId) {
     return false;
   }
-  const requestTurnId = value.turnId;
+  const requestTurnId = readValue(value, "turnId");
   return requestTurnId === null || requestTurnId === undefined || requestTurnId === turnId;
 }
 
@@ -287,10 +297,11 @@ export function isCodexTurnAbortMarkerNotification(
   notification: CodexServerNotification,
   options: { currentPromptText?: string; currentPromptTexts?: readonly string[] } = {},
 ): boolean {
-  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+  const params = readJsonObject(notification, "params");
+  if (notification.method !== "rawResponseItem/completed" || !params) {
     return false;
   }
-  const item = notification.params.item;
+  const item = readValue(params, "item");
   const role = isJsonObject(item) ? readString(item, "role") : undefined;
   if (!isJsonObject(item) || (role !== "user" && role !== "developer")) {
     return false;
@@ -322,7 +333,7 @@ function readCodexTurnAbortMarkerBody(text: string): string | undefined {
 }
 
 function extractRawResponseItemText(item: JsonObject): string {
-  const content = item.content;
+  const content = readValue(item, "content");
   if (!Array.isArray(content)) {
     return "";
   }
@@ -342,22 +353,35 @@ function extractRawResponseItemText(item: JsonObject): string {
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
+  const value = readValue(record, key);
   return typeof value === "string" ? value : undefined;
 }
 
 function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  return asBoolean(record[key]);
+  return asBoolean(readValue(record, key));
+}
+
+function readJsonObject(record: object, key: string): JsonObject | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readValue(record: object, key: string): unknown {
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }
 
 export function readCodexNotificationItem(
   params: JsonValue | undefined,
 ): CodexThreadItem | undefined {
-  if (!isJsonObject(params) || !isJsonObject(params.item)) {
+  const item = isJsonObject(params) ? readJsonObject(params, "item") : undefined;
+  if (!item) {
     return undefined;
   }
-  const item = params.item;
-  return typeof item.id === "string" && typeof item.type === "string"
+  return typeof readValue(item, "id") === "string" && typeof readValue(item, "type") === "string"
     ? (item as CodexThreadItem)
     : undefined;
 }

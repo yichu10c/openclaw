@@ -197,8 +197,9 @@ function readLatestRateLimitNotificationPayload(
   for (let index = notifications.length - 1; index >= 0; index -= 1) {
     const notification = notifications[index];
     if (notification?.method === "account/rateLimits/updated") {
-      rememberCodexRateLimits(notification.params);
-      return notification.params;
+      const params = readValue(notification, "params") as JsonValue | undefined;
+      rememberCodexRateLimits(params);
+      return params;
     }
   }
   return undefined;
@@ -209,16 +210,17 @@ function readLatestCodexErrorNotification(
 ): { message?: string; codexErrorInfo?: JsonValue | null } | undefined {
   for (let index = notifications.length - 1; index >= 0; index -= 1) {
     const notification = notifications[index];
-    if (notification?.method !== "error" || !isJsonObject(notification.params)) {
+    const params = notification ? readJsonObject(notification, "params") : undefined;
+    if (notification?.method !== "error" || !params) {
       continue;
     }
-    const error = notification.params.error;
-    if (!isJsonObject(error)) {
+    const error = readJsonObject(params, "error");
+    if (!error) {
       continue;
     }
     return {
       message: readString(error, "message"),
-      codexErrorInfo: error.codexErrorInfo,
+      codexErrorInfo: readValue(error, "codexErrorInfo") as JsonValue | null | undefined,
     };
   }
   return undefined;
@@ -230,26 +232,41 @@ function readCodexErrorPayload(error: unknown): {
   rateLimits?: JsonValue;
 } {
   const message = error instanceof Error ? error.message : undefined;
-  if (!error || typeof error !== "object" || !("data" in error)) {
+  if (!error || typeof error !== "object") {
     return { message };
   }
-  const data = (error as { data?: unknown }).data as JsonValue | undefined;
+  const data = readValue(error, "data") as JsonValue | undefined;
   if (!isJsonObject(data)) {
     return { message };
   }
-  const nestedError = isJsonObject(data.error) ? data.error : data;
-  const rateLimits = nestedError.rateLimits ?? data.rateLimits;
+  const nestedError = readJsonObject(data, "error") ?? data;
+  const rateLimits = (readValue(nestedError, "rateLimits") ?? readValue(data, "rateLimits")) as
+    | JsonValue
+    | undefined;
   if (rateLimits !== undefined) {
     rememberCodexRateLimits(rateLimits);
   }
   return {
     message: readString(nestedError, "message") ?? message,
-    codexErrorInfo: nestedError.codexErrorInfo,
+    codexErrorInfo: readValue(nestedError, "codexErrorInfo") as JsonValue | null | undefined,
     rateLimits,
   };
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
+  const value = readValue(record, key);
   return typeof value === "string" ? value : undefined;
+}
+
+function readJsonObject(record: object, key: string): JsonObject | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readValue(record: object, key: string): unknown {
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }

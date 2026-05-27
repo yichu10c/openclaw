@@ -11,7 +11,7 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
-import type { CodexDynamicToolSpec, JsonValue } from "./protocol.js";
+import type { CodexDynamicToolSpec, JsonObject, JsonValue } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
@@ -409,12 +409,11 @@ function buildCodexToolSchemaStats(
       return 0;
     }
   })();
-  const properties =
-    isJsonObject(schema) && isJsonObject(schema.properties) ? schema.properties : null;
+  const properties = isJsonObject(schema) ? (readJsonObject(schema, "properties") ?? null) : null;
   return {
     schemaChars,
     schemaHash: stableJsonHash(schema),
-    propertiesCount: properties ? Object.keys(properties).length : null,
+    propertiesCount: properties ? readObjectKeys(properties).length : null,
   };
 }
 
@@ -424,14 +423,16 @@ function sha256Text(value: string): string {
 
 function normalizeForStableHash(value: unknown): unknown {
   if (Array.isArray(value)) {
-    return value.map((entry) => normalizeForStableHash(entry));
+    return Array.from({ length: value.length }, (_entry, index) =>
+      normalizeForStableHash(readValue(value, String(index))),
+    );
   }
   if (value && typeof value === "object") {
     const record = value as Record<string, unknown>;
     return Object.fromEntries(
-      Object.keys(record)
+      readObjectKeys(record)
         .toSorted((left, right) => left.localeCompare(right))
-        .map((key) => [key, normalizeForStableHash(record[key])]),
+        .map((key) => [key, normalizeForStableHash(readValue(record, key))]),
     );
   }
   return value;
@@ -439,6 +440,27 @@ function normalizeForStableHash(value: unknown): unknown {
 
 function stableJsonHash(value: JsonValue): string {
   return sha256Text(JSON.stringify(normalizeForStableHash(value)) ?? "null");
+}
+
+function readJsonObject(record: object, key: string): JsonObject | undefined {
+  const value = readValue(record, key);
+  return isJsonObject(value) ? value : undefined;
+}
+
+function readObjectKeys(record: object): string[] {
+  try {
+    return Object.keys(record);
+  } catch {
+    return [];
+  }
+}
+
+function readValue(record: object, key: string): unknown {
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }
 
 function buildCodexBootstrapInjectionStats(params: {

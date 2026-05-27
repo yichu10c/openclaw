@@ -17,6 +17,16 @@ import {
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import type { CodexAppServerContextEngineBinding } from "./session-binding.js";
 
+function defineThrowingProperty(record: Record<string, unknown>, key: string, message: string) {
+  Object.defineProperty(record, key, {
+    configurable: true,
+    enumerable: true,
+    get() {
+      throw new Error(message);
+    },
+  });
+}
+
 describe("Codex app-server attempt context", () => {
   it("returns a run context report without deferred Codex dynamic tool schemas", () => {
     const tools = [
@@ -109,6 +119,51 @@ describe("Codex app-server attempt context", () => {
     expect(context.memoryReferenceFiles).toEqual([]);
     expect(context.promptContext).toContain(memorySummary);
     expect(context.memoryToolRouted).toBe(false);
+  });
+
+  it("reports unreadable synthetic Codex dynamic tool schemas without throwing", () => {
+    const properties: Record<string, unknown> = {};
+    defineThrowingProperty(properties, "payload", "fuzzplugin tool schema read failed");
+    const anyOf: unknown[] = [{}];
+    defineThrowingProperty(
+      anyOf as unknown as Record<string, unknown>,
+      "0",
+      "mockplugin schema branch failed",
+    );
+    const schema = { type: "object", properties, anyOf };
+
+    const report = buildCodexSystemPromptReport({
+      attempt: {
+        sessionId: "session-1",
+        provider: "codex",
+        modelId: "gpt-5.4-codex",
+      } as EmbeddedRunAttemptParams,
+      sessionKey: "agent:main:session-1",
+      workspaceDir: path.join("tmp", "workspace"),
+      developerInstructions: "test developer instructions",
+      workspaceBootstrapContext: {
+        bootstrapFiles: [],
+        contextFiles: [],
+        promptContextFiles: [],
+        developerInstructionFiles: [],
+        heartbeatReferenceFiles: [],
+      },
+      skillsPrompt: "",
+      tools: [
+        {
+          name: "fuzz_move_report",
+          description: "Synthetic tool with an unreadable schema field",
+          inputSchema: schema,
+        },
+      ] as never,
+    });
+
+    expect(report.tools.entries[0]).toMatchObject({
+      name: "fuzz_move_report",
+      propertiesCount: 1,
+      schemaChars: 0,
+    });
+    expect(report.tools.entries[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("remaps Codex bootstrap files under dot-prefixed workspace directories", () => {
