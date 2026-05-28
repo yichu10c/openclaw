@@ -111,6 +111,26 @@ describe("mapAllowFromEntries", () => {
   ])("$name", ({ input, expected }) => {
     expect(mapAllowFromEntries(input)).toEqual(expected);
   });
+
+  it("coerces entries without using source array methods", () => {
+    const allowFrom = Object.assign(["owner", 42], {
+      map() {
+        throw new Error("fuzzplugin allowFrom map failed");
+      },
+      [Symbol.iterator]() {
+        throw new Error("mockplugin allowFrom iterator failed");
+      },
+    });
+
+    expect(mapAllowFromEntries(allowFrom)).toEqual(["owner", "42"]);
+  });
+
+  it("preserves sparse array map semantics while copying entries", () => {
+    const allowFrom = ["owner", "skip", 42];
+    delete allowFrom[1];
+
+    expect(mapAllowFromEntries(allowFrom)).toEqual(["owner", "42"]);
+  });
 });
 
 describe("resolveOptionalConfigString", () => {

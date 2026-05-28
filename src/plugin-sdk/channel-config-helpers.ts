@@ -134,7 +134,29 @@ type NamedAccountChannelConfigBaseParams<
 export function mapAllowFromEntries(
   allowFrom: Array<string | number> | null | undefined,
 ): string[] {
-  return (allowFrom ?? []).map((entry) => String(entry));
+  if (!Array.isArray(allowFrom)) {
+    return [];
+  }
+
+  let length: number;
+  try {
+    length = allowFrom.length;
+  } catch {
+    return [];
+  }
+
+  const entries: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      if (!(index in allowFrom)) {
+        continue;
+      }
+      entries.push(String(allowFrom[index]));
+    } catch {
+      continue;
+    }
+  }
+  return entries;
 }
 
 /** Normalize user-facing allowlist entries the same way config and doctor flows expect. */
