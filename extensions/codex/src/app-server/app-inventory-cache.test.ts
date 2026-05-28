@@ -133,6 +133,56 @@ describe("Codex app inventory cache", () => {
     });
   });
 
+  it("normalizes unreadable synthetic app/list entries before caching", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const unreadableApp = {
+      id: "fuzz-app",
+      name: "fuzz-app",
+      description: null,
+      logoUrl: null,
+      logoUrlDark: null,
+      distributionChannel: null,
+      branding: { ignored: true },
+      appMetadata: { ignored: true },
+      labels: ["ignored"],
+      installUrl: null,
+      get isAccessible() {
+        throw new Error("fuzzplugin accessibility read failed");
+      },
+      isEnabled: true,
+      get pluginDisplayNames() {
+        throw new Error("fuzzplugin display names read failed");
+      },
+    };
+
+    const snapshot = await cache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [unreadableApp as unknown as v2.AppInfo],
+        nextCursor: null,
+      }),
+    });
+
+    expect(snapshot.apps).toEqual([
+      {
+        id: "fuzz-app",
+        name: "fuzz-app",
+        description: null,
+        logoUrl: null,
+        logoUrlDark: null,
+        distributionChannel: null,
+        branding: null,
+        appMetadata: null,
+        labels: null,
+        installUrl: null,
+        isAccessible: false,
+        isEnabled: true,
+        pluginDisplayNames: [],
+      },
+    ]);
+  });
+
   it("forces a post-install refresh past an older in-flight app/list", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";

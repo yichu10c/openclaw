@@ -482,6 +482,73 @@ describe("Codex plugin thread config", () => {
     ]);
   });
 
+  it("ignores unreadable synthetic app inventory ownership fields", async () => {
+    const appCache = new CodexAppInventoryCache();
+    const unreadableApp = {
+      id: "fuzz-app",
+      name: "fuzz-app",
+      description: null,
+      logoUrl: null,
+      logoUrlDark: null,
+      distributionChannel: null,
+      branding: null,
+      appMetadata: null,
+      labels: null,
+      installUrl: null,
+      isAccessible: true,
+      isEnabled: true,
+      get pluginDisplayNames() {
+        throw new Error("fuzzplugin display names read failed");
+      },
+    };
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [unreadableApp as unknown as v2.AppInfo],
+        nextCursor: null,
+      }),
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            fuzzplugin: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "fuzzplugin",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("fuzzplugin", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("fuzzplugin", []);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.diagnostics).toStrictEqual([]);
+  });
+
   it("force-refreshes app inventory when proven plugin apps are not ready", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({

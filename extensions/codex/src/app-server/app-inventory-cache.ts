@@ -239,10 +239,45 @@ async function listAllApps(
       limit: 100,
       forceRefetch,
     });
-    apps.push(...response.data);
-    cursor = response.nextCursor;
+    apps.push(...readAppInfoArray(response));
+    cursor = readOptionalStringOrNull(response, "nextCursor");
   } while (cursor);
   return apps;
+}
+
+function readAppInfoArray(response: v2.AppsListResponse): v2.AppInfo[] {
+  const data = readArray(response as unknown as Record<string, unknown>, "data");
+  return data.flatMap(normalizeAppInfo);
+}
+
+function normalizeAppInfo(value: unknown): v2.AppInfo[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  const id = readOptionalString(value, "id");
+  if (!id) {
+    return [];
+  }
+  const name = readOptionalString(value, "name") ?? id;
+  return [
+    {
+      id,
+      name,
+      description: readOptionalStringOrNull(value, "description"),
+      logoUrl: readOptionalStringOrNull(value, "logoUrl"),
+      logoUrlDark: readOptionalStringOrNull(value, "logoUrlDark"),
+      distributionChannel: readOptionalStringOrNull(value, "distributionChannel"),
+      branding: null,
+      appMetadata: null,
+      labels: null,
+      installUrl: readOptionalStringOrNull(value, "installUrl"),
+      isAccessible: readOptionalBoolean(value, "isAccessible") ?? false,
+      isEnabled: readOptionalBoolean(value, "isEnabled") ?? false,
+      pluginDisplayNames: readArray(value, "pluginDisplayNames").flatMap((entry) =>
+        typeof entry === "string" && entry.trim() ? [entry] : [],
+      ),
+    },
+  ];
 }
 
 function stripEntryState(entry: CacheEntry): CodexAppInventorySnapshot {
@@ -264,6 +299,25 @@ function readRecordValue(record: Record<string, unknown> | undefined, key: strin
   } catch {
     return undefined;
   }
+}
+
+function readArray(record: Record<string, unknown>, key: string): unknown[] {
+  const value = readRecordValue(record, key);
+  return Array.isArray(value) ? value : [];
+}
+
+function readOptionalString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = readRecordValue(record, key);
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function readOptionalStringOrNull(record: Record<string, unknown>, key: string): string | null {
+  return readOptionalString(record, key) ?? null;
+}
+
+function readOptionalBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+  const value = readRecordValue(record, key);
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function readableRecordEntries(record: Record<string, unknown>): Array<[string, unknown]> {
