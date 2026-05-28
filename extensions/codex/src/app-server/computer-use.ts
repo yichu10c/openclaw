@@ -364,10 +364,10 @@ async function resolveMarketplaceRef(params: {
 }): Promise<MarketplaceResolution> {
   let preferredMarketplaceName = params.config.marketplaceName;
   if (params.config.marketplaceSource && params.allowAdd) {
-    const added = await params.request<{ marketplaceName?: string }>("marketplace/add", {
+    const added = await params.request<unknown>("marketplace/add", {
       source: params.config.marketplaceSource,
     } satisfies CodexRequestObject);
-    preferredMarketplaceName ??= added.marketplaceName;
+    preferredMarketplaceName ??= readMarketplaceAddName(added);
   }
 
   if (params.config.marketplacePath) {
@@ -381,10 +381,10 @@ async function resolveMarketplaceRef(params: {
   if (candidates.length === 0 && shouldAddBundledComputerUseMarketplace(params)) {
     const bundledMarketplacePath =
       params.defaultBundledMarketplacePath ?? DEFAULT_CODEX_BUNDLED_MARKETPLACE_PATH;
-    const added = await params.request<{ marketplaceName?: string }>("marketplace/add", {
+    const added = await params.request<unknown>("marketplace/add", {
       source: bundledMarketplacePath,
     } satisfies CodexRequestObject);
-    preferredMarketplaceName ??= added.marketplaceName;
+    preferredMarketplaceName ??= readMarketplaceAddName(added);
     candidates = await listComputerUseMarketplaceCandidates(params.request, params.config);
   }
 
@@ -471,6 +471,11 @@ function findComputerUseMarketplaces(listed: unknown, pluginName: string): Marke
   return readArrayField(listed, "marketplaces").flatMap((marketplace) =>
     normalizeComputerUseMarketplace(marketplace, pluginName),
   );
+}
+
+function readMarketplaceAddName(value: unknown): string | undefined {
+  const record = asRecord(value);
+  return record ? readStringField(record, "marketplaceName") : undefined;
 }
 
 function normalizeComputerUseMarketplace(value: unknown, pluginName: string): MarketplaceRef[] {

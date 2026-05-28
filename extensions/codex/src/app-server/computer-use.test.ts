@@ -265,6 +265,33 @@ describe("Codex Computer Use setup", () => {
     expect(request).toHaveBeenCalledWith("config/mcpServer/reload", undefined);
   });
 
+  it("ignores unreadable marketplace add names during Computer Use install", async () => {
+    const request = createComputerUseRequest({
+      installed: false,
+      unreadableMarketplaceAddName: true,
+    });
+
+    const status = await installCodexComputerUse({
+      pluginConfig: {
+        computerUse: {
+          marketplaceSource: "github:example/desktop-tools",
+        },
+      },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      marketplaceName: "desktop-tools",
+      tools: ["list_apps"],
+    });
+    expect(request).toHaveBeenCalledWith("plugin/install", {
+      marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+      pluginName: "computer-use",
+    });
+  });
+
   it("re-enables an installed but disabled Computer Use plugin during install", async () => {
     const request = createComputerUseRequest({ installed: true, enabled: false });
 
@@ -555,6 +582,7 @@ function createComputerUseRequest(params: {
   installed: boolean;
   enabled?: boolean;
   marketplaceAvailableAfterListCalls?: number;
+  unreadableMarketplaceAddName?: boolean;
   unreadableMcpTools?: boolean;
   unreadablePluginDetail?: boolean;
   unreadablePluginSummary?: boolean;
@@ -567,11 +595,19 @@ function createComputerUseRequest(params: {
       return { enablement: { plugins: true } };
     }
     if (method === "marketplace/add") {
-      return {
+      const added = {
         marketplaceName: "desktop-tools",
         installedRoot: "/marketplaces/desktop-tools",
         alreadyAdded: false,
       };
+      if (params.unreadableMarketplaceAddName) {
+        Object.defineProperty(added, "marketplaceName", {
+          get() {
+            throw new Error("fuzzplugin marketplace add name read failed");
+          },
+        });
+      }
+      return added;
     }
     if (method === "plugin/list") {
       pluginListCalls += 1;
