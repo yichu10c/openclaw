@@ -170,6 +170,48 @@ describe("resolveDefaultMediaModel", () => {
       }),
     ).toBe("auto");
   });
+
+  it("falls back to manifest defaults when configured provider maps are unreadable", () => {
+    const cfg = {
+      models: {
+        providers: new Proxy(
+          {},
+          {
+            ownKeys() {
+              throw new Error("fuzzplugin media provider keys failed");
+            },
+          },
+        ),
+      },
+    } as never;
+
+    expect(resolveDefaultMediaModel({ providerId: "openrouter", capability: "image", cfg })).toBe(
+      "auto",
+    );
+  });
+
+  it("falls back to manifest defaults when configured provider model arrays are unreadable", () => {
+    const cfg = {
+      models: {
+        providers: {
+          mockplugin: {
+            models: new Proxy([], {
+              get(target, key, receiver) {
+                if (key === "length") {
+                  throw new Error("mockplugin media models failed");
+                }
+                return Reflect.get(target, key, receiver);
+              },
+            }),
+          },
+        },
+      },
+    } as never;
+
+    expect(resolveDefaultMediaModel({ providerId: "mockplugin", capability: "image", cfg })).toBe(
+      undefined,
+    );
+  });
 });
 
 describe("resolveAutoMediaKeyProviders", () => {
@@ -224,6 +266,27 @@ describe("resolveAutoMediaKeyProviders", () => {
     expect(providers.indexOf("minimax-portal-cn")).toBeLessThan(
       providers.indexOf("minimax-portal"),
     );
+  });
+
+  it("ignores unreadable configured image providers during auto discovery", () => {
+    const providers = resolveAutoMediaKeyProviders({
+      capability: "image",
+      cfg: {
+        models: {
+          providers: new Proxy(
+            {},
+            {
+              ownKeys() {
+                throw new Error("fuzzplugin image provider keys failed");
+              },
+            },
+          ),
+        },
+      } as never,
+    });
+
+    expect(providers).toContain("openai");
+    expect(providers).not.toContain("fuzzplugin");
   });
 
   it("keeps the bundled video fallback order", () => {

@@ -70,6 +70,46 @@ export type RuntimeProviderAuthLookup = {
 
 const log = createSubsystemLogger("model-auth");
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function copyRecordEntries(value: unknown): Array<[string, unknown]> {
+  if (!isRecord(value)) {
+    return [];
+  }
+  let keys: string[] = [];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return [];
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, value[key]]);
+    } catch {
+      // Skip unreadable provider entries; normalized lookup can still use later keys.
+    }
+  }
+  return entries;
+}
+
+function readModelProviderConfig(value: unknown): ModelProviderConfig | undefined {
+  return isRecord(value) ? (value as ModelProviderConfig) : undefined;
+}
+
 function resolveConfigAwareEnvApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -82,21 +122,23 @@ function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): ModelProviderConfig | undefined {
-  const providers = cfg?.models?.providers ?? {};
-  const direct = providers[provider] as ModelProviderConfig | undefined;
+  const providers = cfg?.models?.providers;
+  const direct = readModelProviderConfig(readRecordValue(providers, provider));
   if (direct) {
     return direct;
   }
   const normalized = normalizeProviderId(provider);
   if (normalized === provider) {
-    const matched = Object.entries(providers).find(
+    const matched = copyRecordEntries(providers).find(
       ([key]) => normalizeProviderId(key) === normalized,
     );
-    return matched?.[1];
+    return readModelProviderConfig(matched?.[1]);
   }
   return (
-    (providers[normalized] as ModelProviderConfig | undefined) ??
-    Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1]
+    readModelProviderConfig(readRecordValue(providers, normalized)) ??
+    readModelProviderConfig(
+      copyRecordEntries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1],
+    )
   );
 }
 

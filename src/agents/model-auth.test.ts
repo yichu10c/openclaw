@@ -1,6 +1,7 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
@@ -437,6 +438,24 @@ describe("resolveUsableCustomProviderApiKey", () => {
       apiKey: "sk-custom-runtime",
       source: "models.json",
     });
+  });
+
+  it("ignores unreadable custom provider maps", () => {
+    const cfg = {
+      models: {
+        providers: new Proxy(
+          {},
+          {
+            ownKeys() {
+              throw new Error("fuzzplugin auth provider keys failed");
+            },
+          },
+        ),
+      },
+    } as OpenClawConfig;
+
+    expect(resolveUsableCustomProviderApiKey({ cfg, provider: "fuzzplugin" })).toBeNull();
+    expect(hasUsableCustomProviderApiKey(cfg, "fuzzplugin")).toBe(false);
   });
 
   it("does not treat non-env markers as usable credentials", () => {

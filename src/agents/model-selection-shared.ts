@@ -38,6 +38,68 @@ function getLog(): ReturnType<typeof createSubsystemLogger> {
 const OPENROUTER_COMPAT_FREE_ALIAS = "openrouter:free";
 type ModelManifestPlugins = ModelManifestNormalizationContext["manifestPlugins"];
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function copyRecordEntries(value: unknown): Array<[string, unknown]> {
+  if (!isRecord(value)) {
+    return [];
+  }
+  let keys: string[] = [];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return [];
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, value[key]]);
+    } catch {
+      // Skip unreadable configured provider rows; later rows can still resolve models.
+    }
+  }
+  return entries;
+}
+
+function copyArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length = 0;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      // Skip unreadable configured models; later entries can still be selected.
+    }
+  }
+  return entries;
+}
+
+function readStringValue(record: unknown, key: string): string | undefined {
+  const value = readRecordValue(record, key);
+  return typeof value === "string" ? value : undefined;
+}
+
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
@@ -207,13 +269,9 @@ export function inferUniqueProviderFromConfiguredModels(
   }
   const configuredProviders = params.cfg.models?.providers;
   if (configuredProviders) {
-    for (const [providerId, providerConfig] of Object.entries(configuredProviders)) {
-      const models = providerConfig?.models;
-      if (!Array.isArray(models)) {
-        continue;
-      }
-      for (const entry of models) {
-        const modelId = entry?.id?.trim();
+    for (const [providerId, providerConfig] of copyRecordEntries(configuredProviders)) {
+      for (const entry of copyArrayEntries(readRecordValue(providerConfig, "models"))) {
+        const modelId = readStringValue(entry, "id")?.trim();
         if (!modelId) {
           continue;
         }
@@ -320,8 +378,8 @@ function resolveConfiguredOpenRouterCompatFreeRef(
     params.cfg.models?.providers,
     "openrouter",
   );
-  for (const entry of openrouterProviderConfig?.models ?? []) {
-    const modelId = entry?.id?.trim();
+  for (const entry of copyArrayEntries(readRecordValue(openrouterProviderConfig, "models"))) {
+    const modelId = readStringValue(entry, "id")?.trim();
     if (!modelId || !modelId.includes("/") || !modelId.endsWith(":free")) {
       continue;
     }
@@ -402,7 +460,7 @@ function resolveExactConfiguredProviderRef(
     return null;
   }
   const providerKey = normalizeLowercaseStringOrEmpty(providerRaw);
-  const exactConfigured = Object.entries(params.cfg.models.providers).find(
+  const exactConfigured = copyRecordEntries(params.cfg.models.providers).find(
     ([key]) => normalizeLowercaseStringOrEmpty(key) === providerKey,
   );
   if (!exactConfigured) {
@@ -410,8 +468,8 @@ function resolveExactConfiguredProviderRef(
   }
   const [configuredProvider, providerConfig] = exactConfigured;
   const normalizedConfiguredProvider = normalizeProviderId(configuredProvider);
-  const apiOwner =
-    typeof providerConfig?.api === "string" ? normalizeProviderId(providerConfig.api) : "";
+  const providerApi = readStringValue(providerConfig, "api");
+  const apiOwner = providerApi ? normalizeProviderId(providerApi) : "";
   if (!apiOwner || apiOwner === normalizedConfiguredProvider) {
     return null;
   }
@@ -1069,21 +1127,16 @@ export function resolveAllowedModelRefFromAliasIndex(
 }
 
 export function hasConfiguredProviderModelRows(cfg: OpenClawConfig): boolean {
-  const providers = cfg.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return false;
-  }
-  return Object.values(providers).some((provider) => Array.isArray(provider?.models));
+  return copyRecordEntries(cfg.models?.providers).some(([, provider]) =>
+    Array.isArray(readRecordValue(provider, "models")),
+  );
 }
 
 function hasConfiguredProviderRowsNeedingManifestLookup(cfg: OpenClawConfig): boolean {
-  const providers = cfg.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return false;
-  }
-  return Object.entries(providers).some(
+  return copyRecordEntries(cfg.models?.providers).some(
     ([providerRaw, provider]) =>
-      Array.isArray(provider?.models) && normalizeProviderId(providerRaw) !== "openai",
+      Array.isArray(readRecordValue(provider, "models")) &&
+      normalizeProviderId(providerRaw) !== "openai",
   );
 }
 
@@ -1152,40 +1205,41 @@ export function buildConfiguredModelCatalog(params: {
   workspaceDir?: string;
   manifestPlugins?: ModelManifestPlugins;
 }): ModelCatalogEntry[] {
-  const providers = params.cfg.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return [];
-  }
-
   const manifestPlugins = resolveConfiguredModelManifestPlugins(params);
   const catalog: ModelCatalogEntry[] = [];
-  for (const [providerRaw, provider] of Object.entries(providers)) {
+  for (const [providerRaw, provider] of copyRecordEntries(params.cfg.models?.providers)) {
     const providerId = normalizeProviderId(providerRaw);
-    if (!providerId || !Array.isArray(provider?.models)) {
+    const models = copyArrayEntries(readRecordValue(provider, "models"));
+    if (!providerId || models.length === 0) {
       continue;
     }
-    for (const model of provider.models) {
-      const rawId = normalizeOptionalString(model?.id) ?? "";
+    for (const model of models) {
+      const rawId = normalizeOptionalString(readRecordValue(model, "id")) ?? "";
       const id = rawId
         ? normalizeConfiguredProviderCatalogModelId(providerId, rawId, { manifestPlugins })
         : "";
       if (!id) {
         continue;
       }
-      const name = normalizeOptionalString(model?.name) || id;
+      const name = normalizeOptionalString(readRecordValue(model, "name")) || id;
+      const contextWindowValue = readRecordValue(model, "contextWindow");
+      const contextTokensValue = readRecordValue(model, "contextTokens");
       const contextWindow =
-        typeof model?.contextWindow === "number" && model.contextWindow > 0
-          ? model.contextWindow
+        typeof contextWindowValue === "number" && contextWindowValue > 0
+          ? contextWindowValue
           : undefined;
       const contextTokens =
-        typeof model?.contextTokens === "number" && model.contextTokens > 0
-          ? model.contextTokens
+        typeof contextTokensValue === "number" && contextTokensValue > 0
+          ? contextTokensValue
           : undefined;
-      const input = Array.isArray(model?.input) ? model.input : undefined;
-      const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
+      const inputValue = readRecordValue(model, "input");
+      const input = Array.isArray(inputValue) ? inputValue : undefined;
+      const compatValue = readRecordValue(model, "compat");
+      const compat = isRecord(compatValue) ? compatValue : undefined;
+      const reasoningValue = readRecordValue(model, "reasoning");
       const reasoning =
-        typeof model?.reasoning === "boolean"
-          ? model.reasoning
+        typeof reasoningValue === "boolean"
+          ? reasoningValue
           : isVllmQwenThinkingCompat(providerId, compat)
             ? true
             : undefined;

@@ -179,6 +179,34 @@ describe("resolvePdfModelConfigForTool", () => {
     });
   });
 
+  it("preserves built-in image defaults when a configured provider only lists text models", () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const cfg = {
+      ...withDefaultModel("openai/gpt-5.4"),
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT 5.4",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
+      primary: "openai/gpt-5.4-mini",
+    });
+  });
+
   it("preserves explicit MiniMax text models for PDF text extraction fallback", () => {
     vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
     const cfg = {
@@ -297,5 +325,47 @@ describe("resolvePdfModelConfigForTool", () => {
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
       primary: "hatchery/vision-1",
     });
+  });
+
+  it("ignores unreadable configured PDF provider maps", () => {
+    const cfg = {
+      ...withDefaultModel("openai/gpt-5.4"),
+      models: {
+        providers: new Proxy(
+          {},
+          {
+            ownKeys() {
+              throw new Error("fuzzplugin pdf provider keys failed");
+            },
+          },
+        ),
+      },
+    } as OpenClawConfig;
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
+  });
+
+  it("ignores unreadable configured PDF provider model arrays", () => {
+    const cfg = {
+      ...withDefaultModel("mockplugin/text-1"),
+      models: {
+        providers: {
+          mockplugin: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: new Proxy([], {
+              get(target, key, receiver) {
+                if (key === "find" || key === "length") {
+                  throw new Error("mockplugin pdf model read failed");
+                }
+                return Reflect.get(target, key, receiver);
+              },
+            }),
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toBeNull();
   });
 });

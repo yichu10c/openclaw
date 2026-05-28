@@ -65,45 +65,96 @@ function providerHasDeclaredCapability(
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function copyRecordEntries(value: unknown): Array<[string, unknown]> {
+  if (!isRecord(value)) {
+    return [];
+  }
+  let keys: string[] = [];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return [];
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, value[key]]);
+    } catch {
+      // Skip unreadable configured providers; manifest defaults remain available.
+    }
+  }
+  return entries;
+}
+
+function copyArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length = 0;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      // Skip unreadable configured models; later models can still declare media support.
+    }
+  }
+  return entries;
+}
+
+function modelSupportsImage(model: unknown): boolean {
+  return copyArrayEntries(readRecordValue(model, "input")).includes("image");
+}
+
+function readModelId(model: unknown): string | undefined {
+  return normalizeOptionalString(readRecordValue(model, "id"));
+}
+
 function resolveConfiguredImageProviderModel(params: {
   cfg?: OpenClawConfig;
   providerId: string;
 }): string | undefined {
   const normalizedProviderId = normalizeMediaProviderId(params.providerId);
-  const providers = params.cfg?.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return undefined;
-  }
-  for (const [providerKey, providerCfg] of Object.entries(providers)) {
+  for (const [providerKey, providerCfg] of copyRecordEntries(params.cfg?.models?.providers)) {
     if (normalizeMediaProviderId(providerKey) !== normalizedProviderId) {
       continue;
     }
-    const models = providerCfg?.models ?? [];
-    const match = models.find(
-      (model) =>
-        Boolean(normalizeOptionalString(model?.id)) &&
-        Array.isArray(model?.input) &&
-        model.input.includes("image"),
+    return readModelId(
+      copyArrayEntries(readRecordValue(providerCfg, "models")).find(modelSupportsImage),
     );
-    return normalizeOptionalString(match?.id);
   }
   return undefined;
 }
 
 function resolveConfiguredImageProviderIds(cfg?: OpenClawConfig): string[] {
-  const providers = cfg?.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return [];
-  }
   const configured: string[] = [];
-  for (const [providerKey, providerCfg] of Object.entries(providers)) {
+  for (const [providerKey, providerCfg] of copyRecordEntries(cfg?.models?.providers)) {
     const normalizedProviderId = normalizeMediaExecutionProviderId(providerKey);
     if (!normalizedProviderId || configured.includes(normalizedProviderId)) {
       continue;
     }
-    const models = providerCfg?.models ?? [];
-    const hasImageModel = models.some(
-      (model) => Array.isArray(model?.input) && model.input.includes("image"),
+    const hasImageModel = copyArrayEntries(readRecordValue(providerCfg, "models")).some(
+      modelSupportsImage,
     );
     if (hasImageModel) {
       configured.push(normalizedProviderId);

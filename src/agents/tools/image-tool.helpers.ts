@@ -135,6 +135,46 @@ export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
   return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function copyArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length = 0;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      // Skip unreadable configured image model entries; later entries can still match.
+    }
+  }
+  return entries;
+}
+
+function copyStringArrayEntries(value: unknown): string[] {
+  return copyArrayEntries(value).filter((entry): entry is string => typeof entry === "string");
+}
+
 function formatConfiguredImageModelRef(provider: string, modelId: string): string {
   const slash = modelId.indexOf("/");
   if (slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider) {
@@ -242,13 +282,17 @@ export function resolveProviderVisionModelFromConfig(params: {
   if (isMinimaxVlmProvider(params.provider)) {
     return null;
   }
-  const providerCfg = findNormalizedProviderValue(
-    params.cfg?.models?.providers,
-    params.provider,
-  ) as unknown as { models?: Array<{ id?: string; input?: string[] }> } | undefined;
-  const models = providerCfg?.models ?? [];
-  const picked = models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
-  const id = (picked?.id ?? "").trim();
+  const providerCfg = findNormalizedProviderValue(params.cfg?.models?.providers, params.provider);
+  const picked = copyArrayEntries(readRecordValue(providerCfg, "models")).find((model) => {
+    const id = readRecordValue(model, "id");
+    return (
+      typeof id === "string" &&
+      id.trim().length > 0 &&
+      copyStringArrayEntries(readRecordValue(model, "input")).includes("image")
+    );
+  });
+  const pickedId = readRecordValue(picked, "id");
+  const id = typeof pickedId === "string" ? pickedId.trim() : "";
   if (!id) {
     return null;
   }

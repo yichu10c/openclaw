@@ -99,13 +99,38 @@ function stableConfigStringify(value: unknown): string {
     return JSON.stringify(value) ?? "null";
   }
   if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableConfigStringify(entry)).join(",")}]`;
+    let length = 0;
+    try {
+      length = value.length;
+    } catch {
+      return "[]";
+    }
+    const entries: string[] = [];
+    for (let index = 0; index < length; index += 1) {
+      try {
+        entries.push(stableConfigStringify(value[index]));
+      } catch {
+        entries.push("null");
+      }
+    }
+    return `[${entries.join(",")}]`;
   }
   const record = value as Record<string, unknown>;
-  const keys = Object.keys(record).toSorted();
-  return `{${keys
-    .map((key) => `${JSON.stringify(key)}:${stableConfigStringify(record[key])}`)
-    .join(",")}}`;
+  let keys: string[] = [];
+  try {
+    keys = Object.keys(record).toSorted();
+  } catch {
+    return "{}";
+  }
+  const entries: string[] = [];
+  for (const key of keys) {
+    try {
+      entries.push(`${JSON.stringify(key)}:${stableConfigStringify(record[key])}`);
+    } catch {
+      // Ignore unreadable config entries; cache keys still reflect readable config state.
+    }
+  }
+  return `{${entries.join(",")}}`;
 }
 
 function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {

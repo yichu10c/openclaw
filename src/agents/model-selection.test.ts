@@ -10,6 +10,8 @@ import {
   inferUniqueProviderFromConfiguredModels,
   parseModelRef,
   buildModelAliasIndex,
+  findNormalizedProviderKey,
+  findNormalizedProviderValue,
   normalizeModelSelection,
   normalizeProviderId,
   normalizeProviderIdForAuth,
@@ -296,6 +298,45 @@ describe("model-selection", () => {
       expect(normalizeProviderIdForAuth("qwencloud")).toBe("qwencloud");
       expect(normalizeProviderIdForAuth("openai-codex")).toBe("openai-codex");
       expect(normalizeProviderIdForAuth("openai")).toBe("openai");
+    });
+  });
+
+  describe("normalized provider lookup", () => {
+    it("ignores unreadable provider maps", () => {
+      const entries = new Proxy(
+        {},
+        {
+          ownKeys() {
+            throw new Error("fuzzplugin provider keys failed");
+          },
+        },
+      ) as Record<string, { apiKey: string }>;
+
+      expect(findNormalizedProviderValue(entries, "fuzzplugin")).toBeUndefined();
+      expect(findNormalizedProviderKey(entries, "fuzzplugin")).toBeUndefined();
+    });
+
+    it("skips unreadable provider entries", () => {
+      const entries = Object.defineProperties(
+        {},
+        {
+          mockplugin: {
+            enumerable: true,
+            get() {
+              throw new Error("mockplugin provider entry failed");
+            },
+          },
+          fuzzplugin: {
+            enumerable: true,
+            value: { apiKey: "sk-configured" },
+          },
+        },
+      ) as Record<string, { apiKey: string }>;
+
+      expect(findNormalizedProviderValue(entries, "fuzzplugin")).toEqual({
+        apiKey: "sk-configured",
+      });
+      expect(findNormalizedProviderKey(entries, "fuzzplugin")).toBe("fuzzplugin");
     });
   });
 

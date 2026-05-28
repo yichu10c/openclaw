@@ -93,6 +93,23 @@ describe("runtime snapshot state", () => {
     );
   });
 
+  it("builds cache keys for configs with unreadable provider maps", () => {
+    const cfg = {
+      models: {
+        providers: new Proxy(
+          {},
+          {
+            ownKeys() {
+              throw new Error("fuzzplugin runtime provider keys failed");
+            },
+          },
+        ),
+      },
+    } as OpenClawConfig;
+
+    expect(resolveRuntimeConfigCacheKey(cfg)).toMatch(/^config:/);
+  });
+
   it("selects runtime config only when input still matches the runtime source", () => {
     const sourceConfig: OpenClawConfig = {
       models: {

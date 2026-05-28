@@ -9,6 +9,38 @@ export function normalizeProviderIdForAuth(provider: string): string {
   return normalizeProviderId(provider);
 }
 
+function copyRecordEntries<T>(entries: Record<string, T> | undefined): Array<[string, T]> {
+  if (!entries) {
+    return [];
+  }
+  let keys: string[] = [];
+  try {
+    keys = Object.keys(entries);
+  } catch {
+    return [];
+  }
+  const copied: Array<[string, T]> = [];
+  for (const key of keys) {
+    try {
+      copied.push([key, entries[key]]);
+    } catch {
+      // Skip unreadable provider entries; normalized lookup can still use later keys.
+    }
+  }
+  return copied;
+}
+
+function copyRecordKeys(entries: Record<string, unknown> | undefined): string[] {
+  if (!entries) {
+    return [];
+  }
+  try {
+    return Object.keys(entries);
+  } catch {
+    return [];
+  }
+}
+
 export function findNormalizedProviderValue<T>(
   entries: Record<string, T> | undefined,
   provider: string,
@@ -17,7 +49,7 @@ export function findNormalizedProviderValue<T>(
     return undefined;
   }
   const providerKey = normalizeProviderId(provider);
-  for (const [key, value] of Object.entries(entries)) {
+  for (const [key, value] of copyRecordEntries(entries)) {
     if (normalizeProviderId(key) === providerKey) {
       return value;
     }
@@ -33,5 +65,5 @@ export function findNormalizedProviderKey(
     return undefined;
   }
   const providerKey = normalizeProviderId(provider);
-  return Object.keys(entries).find((key) => normalizeProviderId(key) === providerKey);
+  return copyRecordKeys(entries).find((key) => normalizeProviderId(key) === providerKey);
 }
