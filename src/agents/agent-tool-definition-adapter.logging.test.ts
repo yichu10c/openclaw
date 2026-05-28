@@ -232,6 +232,61 @@ describe("agent tool definition adapter logging", () => {
     expect(message).not.toContain("export XAI_API_KEY");
   });
 
+  it("keeps exec failure logging bounded when params contain unreadable fields", async () => {
+    const baseTool = {
+      name: "exec",
+      label: "exec",
+      description: "runs commands",
+      parameters: Type.Any(),
+      execute: async () => {
+        throw new Error("exec denied: allowlist miss");
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    const params = { timeout: 5 };
+    Object.defineProperty(params, "command", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin command read failed");
+      },
+    });
+    Object.defineProperty(params, "env", {
+      enumerable: true,
+      get() {
+        throw new Error("mockplugin env read failed");
+      },
+    });
+
+    const result = await def.execute(
+      "call-exec-denied-unreadable",
+      params,
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const details = result.details as
+      | { status?: string; tool?: string; error?: string }
+      | undefined;
+    expect(details).toMatchObject({
+      status: "error",
+      tool: "exec",
+      error: "exec denied: allowlist miss",
+    });
+    const message = String(firstLogErrorMessage());
+    expect(message).toContain("[tools] exec failed: exec denied: allowlist miss");
+    expect(message).toContain('"command":{"omitted":true');
+    expect(message).toContain('"reason":"exec command may contain credentials"');
+    expect(message).toContain('"unreadable":true');
+    expect(message).toContain('"env":"[unreadable exec env]"');
+    expect(message).toContain('"timeout":5');
+    expect(message).not.toContain("fuzzplugin command read failed");
+    expect(message).not.toContain("mockplugin env read failed");
+  });
+
   it("omits cmd-style exec payloads from normalized bash failure logs", async () => {
     const commandSecret =
       "issue85049-cmd-alias-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";

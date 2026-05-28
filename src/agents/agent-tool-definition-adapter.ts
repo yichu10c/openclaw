@@ -45,6 +45,8 @@ type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteA
 const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
 const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
 const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
+const UNREADABLE_EXEC_ENV_VALUE = "[unreadable exec env]";
+const UNREADABLE_EXEC_PARAM_VALUE = "[unreadable exec param]";
 const EXEC_COMMAND_PARAM_KEYS = new Set(["command", "cmd"]);
 
 export type ClientToolCallRecorder =
@@ -152,15 +154,29 @@ function summarizeExecCommandForLog(command: unknown): Record<string, unknown> {
   });
 }
 
+function summarizeUnreadableSensitiveValueForLog(params: {
+  reason: string;
+  type: string;
+}): Record<string, unknown> {
+  return {
+    omitted: true,
+    reason: params.reason,
+    type: params.type,
+    unreadable: true,
+  };
+}
+
 function sanitizeExecEnvForLog(value: unknown): unknown {
   if (!isPlainObject(value)) {
     return value === undefined ? undefined : "[omitted exec env]";
   }
-  return Object.fromEntries(
-    Object.keys(value)
-      .toSorted()
-      .map((key) => [key, SENSITIVE_EXEC_ENV_VALUE]),
-  );
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return UNREADABLE_EXEC_ENV_VALUE;
+  }
+  return Object.fromEntries(keys.toSorted().map((key) => [key, SENSITIVE_EXEC_ENV_VALUE]));
 }
 
 function sanitizeExecFailureParamsForLog(value: unknown): unknown {
@@ -181,7 +197,30 @@ function sanitizeExecFailureParamsForLog(value: unknown): unknown {
     });
   }
   const sanitized: Record<string, unknown> = {};
-  for (const [key, field] of Object.entries(value)) {
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return summarizeUnreadableSensitiveValueForLog({
+      reason: "exec params may contain command credentials",
+      type: "object",
+    });
+  }
+  for (const key of keys) {
+    let field: unknown;
+    try {
+      field = value[key];
+    } catch {
+      sanitized[key] = EXEC_COMMAND_PARAM_KEYS.has(key)
+        ? summarizeUnreadableSensitiveValueForLog({
+            reason: "exec command may contain credentials",
+            type: "unknown",
+          })
+        : key === "env"
+          ? UNREADABLE_EXEC_ENV_VALUE
+          : UNREADABLE_EXEC_PARAM_VALUE;
+      continue;
+    }
     if (EXEC_COMMAND_PARAM_KEYS.has(key)) {
       sanitized[key] = summarizeExecCommandForLog(field);
       continue;
