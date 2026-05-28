@@ -6,21 +6,31 @@ export function stripUnsupportedSchemaKeywords(
     return schema;
   }
   if (Array.isArray(schema)) {
-    return schema.map((entry) => stripUnsupportedSchemaKeywords(entry, unsupportedKeywords));
+    const entries = copyArrayEntries(schema);
+    return entries
+      ? entries.map((entry) => stripUnsupportedSchemaKeywords(entry, unsupportedKeywords))
+      : [];
   }
   const obj = schema as Record<string, unknown>;
   const cleaned: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
+  const entries = copyObjectEntries(obj);
+  if (!entries) {
+    return {};
+  }
+  for (const [key, value] of entries) {
     if (unsupportedKeywords.has(key)) {
       continue;
     }
     if (key === "properties" && value && typeof value === "object" && !Array.isArray(value)) {
-      cleaned[key] = Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([childKey, childValue]) => [
-          childKey,
-          stripUnsupportedSchemaKeywords(childValue, unsupportedKeywords),
-        ]),
-      );
+      const propertyEntries = copyObjectEntries(value as Record<string, unknown>);
+      cleaned[key] = propertyEntries
+        ? Object.fromEntries(
+            propertyEntries.map(([childKey, childValue]) => [
+              childKey,
+              stripUnsupportedSchemaKeywords(childValue, unsupportedKeywords),
+            ]),
+          )
+        : {};
       continue;
     }
     if (
@@ -30,41 +40,60 @@ export function stripUnsupportedSchemaKeywords(
         key === "patternProperties") &&
       isSchemaMap(value)
     ) {
-      cleaned[key] = Object.fromEntries(
-        Object.entries(value).map(([childKey, childValue]) => [
-          childKey,
-          stripUnsupportedSchemaKeywords(childValue, unsupportedKeywords),
-        ]),
-      );
+      const mapEntries = copyObjectEntries(value);
+      cleaned[key] = mapEntries
+        ? Object.fromEntries(
+            mapEntries.map(([childKey, childValue]) => [
+              childKey,
+              stripUnsupportedSchemaKeywords(childValue, unsupportedKeywords),
+            ]),
+          )
+        : {};
       continue;
     }
     if (key === "dependencies" && isSchemaMap(value)) {
-      cleaned[key] = Object.fromEntries(
-        Object.entries(value).map(([childKey, childValue]) => [
-          childKey,
-          Array.isArray(childValue)
-            ? childValue
-            : stripUnsupportedSchemaKeywords(childValue, unsupportedKeywords),
-        ]),
-      );
+      const mapEntries = copyObjectEntries(value);
+      cleaned[key] = mapEntries
+        ? Object.fromEntries(
+            mapEntries.map(([childKey, childValue]) => [
+              childKey,
+              Array.isArray(childValue)
+                ? (copyArrayEntries(childValue) ?? [])
+                : stripUnsupportedSchemaKeywords(childValue, unsupportedKeywords),
+            ]),
+          )
+        : {};
       continue;
     }
     if (key === "items" && value && typeof value === "object") {
-      cleaned[key] = Array.isArray(value)
-        ? value.map((entry) => stripUnsupportedSchemaKeywords(entry, unsupportedKeywords))
-        : stripUnsupportedSchemaKeywords(value, unsupportedKeywords);
+      if (Array.isArray(value)) {
+        const itemEntries = copyArrayEntries(value);
+        if (itemEntries) {
+          cleaned[key] = itemEntries.map((entry) =>
+            stripUnsupportedSchemaKeywords(entry, unsupportedKeywords),
+          );
+        }
+      } else {
+        cleaned[key] = stripUnsupportedSchemaKeywords(value, unsupportedKeywords);
+      }
       continue;
     }
     if (key === "prefixItems" && Array.isArray(value)) {
-      cleaned[key] = value.map((entry) =>
-        stripUnsupportedSchemaKeywords(entry, unsupportedKeywords),
-      );
+      const itemEntries = copyArrayEntries(value);
+      if (itemEntries) {
+        cleaned[key] = itemEntries.map((entry) =>
+          stripUnsupportedSchemaKeywords(entry, unsupportedKeywords),
+        );
+      }
       continue;
     }
     if ((key === "anyOf" || key === "oneOf" || key === "allOf") && Array.isArray(value)) {
-      cleaned[key] = value.map((entry) =>
-        stripUnsupportedSchemaKeywords(entry, unsupportedKeywords),
-      );
+      const variantEntries = copyArrayEntries(value);
+      if (variantEntries) {
+        cleaned[key] = variantEntries.map((entry) =>
+          stripUnsupportedSchemaKeywords(entry, unsupportedKeywords),
+        );
+      }
       continue;
     }
     if (SCHEMA_OBJECT_KEYWORDS.has(key)) {
@@ -92,3 +121,24 @@ const SCHEMA_OBJECT_KEYWORDS = new Set([
   "unevaluatedItems",
   "unevaluatedProperties",
 ]);
+
+function copyArrayEntries<T>(values: readonly T[]): T[] | undefined {
+  try {
+    const entries: T[] = [];
+    const length = values.length;
+    for (let index = 0; index < length; index += 1) {
+      entries.push(values[index]);
+    }
+    return entries;
+  } catch {
+    return undefined;
+  }
+}
+
+function copyObjectEntries(record: Record<string, unknown>): Array<[string, unknown]> | undefined {
+  try {
+    return Object.entries(record);
+  } catch {
+    return undefined;
+  }
+}

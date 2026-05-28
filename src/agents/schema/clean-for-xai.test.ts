@@ -180,9 +180,44 @@ describe("stripXaiUnsupportedKeywords", () => {
     expect(result.additionalProperties).toBe(false);
   });
 
+  it("omits unreadable schema objects without leaking the original proxy", () => {
+    const root = withUnreadableOwnKeys(
+      {
+        type: "object",
+        properties: {
+          angle: { type: "string", maxLength: 8 },
+        },
+      },
+      "fuzzplugin xAI schema key enumeration failed",
+    );
+    const schema = {
+      type: "object",
+      properties: withUnreadableOwnKeys(
+        {
+          angle: { type: "string", maxLength: 8 },
+        },
+        "fuzzplugin xAI properties key enumeration failed",
+      ),
+    };
+
+    expect(stripXaiUnsupportedKeywords(root)).toEqual({});
+    expect(stripXaiUnsupportedKeywords(schema)).toEqual({
+      type: "object",
+      properties: {},
+    });
+  });
+
   it("passes through primitives and null unchanged", () => {
     expect(stripXaiUnsupportedKeywords(null)).toBeNull();
     expect(stripXaiUnsupportedKeywords("string")).toBe("string");
     expect(stripXaiUnsupportedKeywords(42)).toBe(42);
   });
 });
+
+function withUnreadableOwnKeys<T extends object>(value: T, message: string): T {
+  return new Proxy(value, {
+    ownKeys() {
+      throw new Error(message);
+    },
+  });
+}

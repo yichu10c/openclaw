@@ -357,6 +357,35 @@ describe("cleanSchemaForGemini", () => {
       type: "array",
     });
   });
+
+  it("omits unreadable Gemini schema objects without leaking the original proxy", () => {
+    const cleanedRoot = cleanSchemaForGemini(
+      withUnreadableOwnKeys(
+        {
+          type: "object",
+          properties: {
+            angle: { type: "string", maxLength: 8 },
+          },
+        },
+        "fuzzplugin Gemini schema key enumeration failed",
+      ),
+    ) as Record<string, unknown>;
+    const cleanedProperties = cleanSchemaForGemini({
+      type: "object",
+      properties: withUnreadableOwnKeys(
+        {
+          angle: { type: "string", maxLength: 8 },
+        },
+        "fuzzplugin Gemini properties key enumeration failed",
+      ),
+    }) as Record<string, unknown>;
+
+    expect(cleanedRoot).toEqual({});
+    expect(cleanedProperties).toEqual({
+      type: "object",
+      properties: {},
+    });
+  });
 });
 
 function withUnreadableArrayMethod<T>(values: T[], method: PropertyKey, message: string): T[] {
@@ -366,6 +395,14 @@ function withUnreadableArrayMethod<T>(values: T[], method: PropertyKey, message:
         throw new Error(message);
       }
       return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
+function withUnreadableOwnKeys<T extends object>(value: T, message: string): T {
+  return new Proxy(value, {
+    ownKeys() {
+      throw new Error(message);
     },
   });
 }

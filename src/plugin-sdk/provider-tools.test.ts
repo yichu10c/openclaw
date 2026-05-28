@@ -200,6 +200,68 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
   });
 
+  it("omits unreadable schema objects before provider compatibility traversal", () => {
+    const unreadableRoot = withUnreadableOwnKeys(
+      {
+        type: "object",
+        properties: {
+          angle: { type: "string", maxLength: 8 },
+        },
+      },
+      "fuzzplugin schema key enumeration failed",
+    );
+    const unreadableProperties = {
+      type: "object",
+      properties: withUnreadableOwnKeys(
+        {
+          angle: { type: "string", maxLength: 8 },
+        },
+        "fuzzplugin schema properties key enumeration failed",
+      ),
+    };
+    const geminiTools = [
+      { name: "fuzz_move_delta", description: "", parameters: unreadableRoot },
+      { name: "fuzz_move_angles", description: "", parameters: unreadableProperties },
+    ] as never;
+
+    const geminiCtx = {
+      provider: "gemini",
+      modelId: "gemini-3-pro",
+      modelApi: "gemini",
+      tools: geminiTools,
+    } as never;
+    expect(normalizeGeminiToolSchemas(geminiCtx).map((tool) => tool.parameters)).toEqual([
+      {},
+      { type: "object", properties: {} },
+    ]);
+    expect(inspectGeminiToolSchemas(geminiCtx)).toEqual([
+      {
+        toolName: "fuzz_move_delta",
+        toolIndex: 0,
+        violations: ["fuzz_move_delta.parameters.properties.angle.maxLength"],
+      },
+    ]);
+
+    expect(
+      normalizeDeepSeekToolSchemas({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        tools: [{ name: "fuzz_move_delta", description: "", parameters: unreadableRoot }],
+      } as never)[0]?.parameters,
+    ).toEqual({});
+    expect(normalizeOpenAIParameters(unreadableRoot)).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+    expect(findOpenAIStrictSchemaViolations(unreadableRoot, "fuzz_move_delta.parameters")).toEqual([
+      "fuzz_move_delta.parameters.additionalProperties",
+      "fuzz_move_delta.parameters.required",
+    ]);
+  });
+
   it("collapses anyOf and oneOf unions for the deepseek family", () => {
     const hooks = buildProviderToolCompatFamilyHooks("deepseek");
     const tools = [
@@ -668,6 +730,14 @@ function withUnreadableArrayMethod<T>(values: T[], method: PropertyKey, message:
         throw new Error(message);
       }
       return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
+function withUnreadableOwnKeys<T extends object>(value: T, message: string): T {
+  return new Proxy(value, {
+    ownKeys() {
+      throw new Error(message);
     },
   });
 }
