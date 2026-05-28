@@ -269,6 +269,52 @@ describe("schema validator", () => {
     ).toThrow("invalid schema: <schema>.enum[0] must be JSON-compatible; got bigint");
   });
 
+  it("rejects unreadable config values before validation or default cloning", () => {
+    const unreadableValue = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("fuzzplugin config key enumeration failed");
+        },
+      },
+    );
+    const schema = {
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          default: "auto",
+        },
+      },
+      additionalProperties: false,
+    } as const;
+
+    const withoutDefaults = expectValidationFailure({
+      cacheKey: "schema-validator.test.fuzzplugin.unreadable-value",
+      schema,
+      value: unreadableValue,
+      cache: false,
+    });
+    expect(withoutDefaults.errors).toContainEqual({
+      path: "<root>",
+      message: "must be readable JSON-compatible data",
+      text: "<root>: must be readable JSON-compatible data",
+    });
+
+    const withDefaults = expectValidationFailure({
+      cacheKey: "schema-validator.test.fuzzplugin.unreadable-value.defaults",
+      schema,
+      value: unreadableValue,
+      applyDefaults: true,
+      cache: false,
+    });
+    expect(withDefaults.errors).toContainEqual({
+      path: "<root>",
+      message: "must be readable JSON-compatible data",
+      text: "<root>: must be readable JSON-compatible data",
+    });
+  });
+
   it("rejects invalid JSON Schema constraint keyword values", () => {
     for (const [cacheKey, schema] of [
       [

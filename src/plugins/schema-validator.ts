@@ -318,6 +318,17 @@ function formatValidationErrors(
   });
 }
 
+function formatJsonCompatibilityValidationError(issue: string): JsonSchemaValidationError {
+  const match = /^(.*?) (must .*)$/.exec(issue);
+  const path = sanitizeTerminalText(match?.[1]?.trim() || "<root>");
+  const message = sanitizeTerminalText(match?.[2]?.trim() || issue);
+  return {
+    path,
+    message,
+    text: `${path}: ${message}`,
+  };
+}
+
 export function validateJsonSchemaValue(params: {
   schema: JsonSchemaValue;
   cacheKey: string;
@@ -333,6 +344,15 @@ export function validateJsonSchemaValue(params: {
   const schemaError = findJsonSchemaShapeError(params.schema);
   if (schemaError) {
     throw new Error(sanitizeTerminalText(`invalid schema: ${schemaError}`));
+  }
+
+  const valueJsonIssue =
+    params.value === undefined ? undefined : describeNonJsonCompatibleValue(params.value, "<root>");
+  if (valueJsonIssue) {
+    return {
+      ok: false,
+      errors: [formatJsonCompatibilityValidationError(valueJsonIssue)],
+    };
   }
 
   const useCache = params.cache !== false;
