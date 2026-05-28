@@ -10,6 +10,10 @@ function formatJsonPath(root: string, path: readonly (string | number)[]): strin
   return current || root || "value";
 }
 
+function describeUnreadableJsonValue(root: string, path: readonly (string | number)[]): string {
+  return `${formatJsonPath(root, path)} must be readable JSON-compatible data`;
+}
+
 function describeNonJsonCompatibleValueAtPath(
   value: unknown,
   root: string,
@@ -35,13 +39,21 @@ function describeNonJsonCompatibleValueAtPath(
   stack.add(value);
   try {
     if (Array.isArray(value)) {
-      for (let index = 0; index < value.length; index += 1) {
-        const issue = describeNonJsonCompatibleValueAtPath(
-          value[index],
-          root,
-          [...path, index],
-          stack,
-        );
+      let length: number;
+      try {
+        length = value.length;
+      } catch {
+        return describeUnreadableJsonValue(root, path);
+      }
+
+      for (let index = 0; index < length; index += 1) {
+        let entry: unknown;
+        try {
+          entry = value[index];
+        } catch {
+          return describeUnreadableJsonValue(root, [...path, index]);
+        }
+        const issue = describeNonJsonCompatibleValueAtPath(entry, root, [...path, index], stack);
         if (issue) {
           return issue;
         }
@@ -49,7 +61,20 @@ function describeNonJsonCompatibleValueAtPath(
       return undefined;
     }
 
-    for (const [key, entry] of Object.entries(value)) {
+    let keys: string[];
+    try {
+      keys = Object.keys(value);
+    } catch {
+      return describeUnreadableJsonValue(root, path);
+    }
+
+    for (const key of keys) {
+      let entry: unknown;
+      try {
+        entry = (value as Record<string, unknown>)[key];
+      } catch {
+        return describeUnreadableJsonValue(root, [...path, key]);
+      }
       const issue = describeNonJsonCompatibleValueAtPath(entry, root, [...path, key], stack);
       if (issue) {
         return issue;

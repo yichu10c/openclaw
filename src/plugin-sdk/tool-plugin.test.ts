@@ -266,4 +266,35 @@ describe("defineToolPlugin", () => {
       "tool plugin tool mock_move_angles parameters must be a JSON-compatible schema object",
     );
   });
+
+  it("rejects unreadable tool parameter schemas before runtime registration", () => {
+    const parameters = {
+      type: "object",
+      properties: {},
+    };
+    Object.defineProperty(parameters.properties, "angle", {
+      enumerable: true,
+      get() {
+        throw new Error("getter exploded");
+      },
+    });
+
+    expect(() =>
+      defineToolPlugin({
+        id: "fuzzplugin",
+        name: "Fuzz Plugin",
+        description: "Fuzz plugin.",
+        tools: (tool) => [
+          tool({
+            name: "fuzz_move_angles",
+            description: "Move angles.",
+            parameters: parameters as never,
+            execute: () => "ok",
+          }),
+        ],
+      }),
+    ).toThrow(
+      "tool plugin tool fuzz_move_angles parameters must be a JSON-compatible schema object: schema.properties.angle must be readable JSON-compatible data",
+    );
+  });
 });
