@@ -70,6 +70,23 @@ function readRecordValue(record: Record<string, unknown>, key: string): unknown 
   }
 }
 
+function writeRecordValue(record: Record<string, unknown>, key: string, value: unknown): boolean {
+  try {
+    record[key] = value;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearRecordValue(record: Record<string, unknown>, key: string): void {
+  try {
+    delete record[key];
+  } catch {
+    writeRecordValue(record, key, undefined);
+  }
+}
+
 function copyStructuredAttachmentEntries(args: Record<string, unknown>): unknown[] {
   const attachments = readRecordValue(args, "attachments");
   if (!Array.isArray(attachments)) {
@@ -584,35 +601,26 @@ export async function hydrateAttachmentParamsForAction(params: {
 }
 
 export function parseJsonMessageParam(params: Record<string, unknown>, key: string): void {
-  const raw = params[key];
+  const raw = readRecordValue(params, key);
   if (typeof raw !== "string") {
     return;
   }
   const trimmed = raw.trim();
   if (!trimmed) {
-    delete params[key];
+    clearRecordValue(params, key);
     return;
   }
+  let parsed: unknown;
   try {
-    params[key] = JSON.parse(trimmed) as unknown;
+    parsed = JSON.parse(trimmed) as unknown;
   } catch {
     throw new Error(`--${key} must be valid JSON`);
+  }
+  if (!writeRecordValue(params, key, parsed)) {
+    throw new Error(`--${key} could not be updated`);
   }
 }
 
 export function parseInteractiveParam(params: Record<string, unknown>): void {
-  const raw = params.interactive;
-  if (typeof raw !== "string") {
-    return;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    delete params.interactive;
-    return;
-  }
-  try {
-    params.interactive = JSON.parse(trimmed) as unknown;
-  } catch {
-    throw new Error("--interactive must be valid JSON");
-  }
+  parseJsonMessageParam(params, "interactive");
 }

@@ -17,6 +17,8 @@ import {
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
+  parseInteractiveParam,
+  parseJsonMessageParam,
   resolveExtraActionMediaSourceParamKeys,
   resolveAttachmentMediaPolicy,
 } from "./message-action-params.js";
@@ -671,5 +673,68 @@ describe("message action sandbox media hydration", () => {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
       await fs.rm(outsideRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("message action JSON param parsing", () => {
+  it("parses string-backed JSON params", () => {
+    const args: Record<string, unknown> = {
+      presentation: '{"kind":"card"}',
+      interactive: '{"type":"button"}',
+    };
+
+    parseJsonMessageParam(args, "presentation");
+    parseInteractiveParam(args);
+
+    expect(args.presentation).toEqual({ kind: "card" });
+    expect(args.interactive).toEqual({ type: "button" });
+  });
+
+  it("treats unreadable synthetic JSON params as absent", () => {
+    const args = {
+      get presentation() {
+        throw new Error("fuzzplugin presentation getter failed");
+      },
+      get interactive() {
+        throw new Error("fuzzplugin interactive getter failed");
+      },
+    } as Record<string, unknown>;
+
+    expect(() => parseJsonMessageParam(args, "presentation")).not.toThrow();
+    expect(() => parseInteractiveParam(args)).not.toThrow();
+  });
+
+  it("does not throw raw errors when clearing blank synthetic JSON params", () => {
+    const args = new Proxy(
+      { presentation: "   " },
+      {
+        deleteProperty(_target, prop) {
+          if (prop === "presentation") {
+            throw new Error("fuzzplugin delete failed");
+          }
+          return true;
+        },
+      },
+    ) as Record<string, unknown>;
+
+    expect(() => parseJsonMessageParam(args, "presentation")).not.toThrow();
+  });
+
+  it("reports normal update errors when synthetic parsed params cannot be written", () => {
+    const args = new Proxy(
+      { presentation: '{"kind":"card"}' },
+      {
+        set(_target, prop) {
+          if (prop === "presentation") {
+            throw new Error("fuzzplugin write failed");
+          }
+          return true;
+        },
+      },
+    ) as Record<string, unknown>;
+
+    expect(() => parseJsonMessageParam(args, "presentation")).toThrow(
+      "--presentation could not be updated",
+    );
   });
 });
