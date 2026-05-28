@@ -388,15 +388,15 @@ describe("doctor preview warnings", () => {
 
   it("includes active tool schema projection warnings", async () => {
     activeToolSchemaState.warnings = [
-      '- agents.main: active tool "dofbot_move_angles" from plugin "dofbot" has unsupported runtime input schema.',
+      '- agents.main: active tool "fuzz_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
     ];
 
     const warnings = await collectDoctorPreviewWarnings({
-      cfg: { tools: { allow: ["dofbot_move_angles"] } },
+      cfg: { tools: { allow: ["fuzz_move_angles"] } },
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(warnings.some((warning) => warning.includes('active tool "dofbot_move_angles"'))).toBe(
+    expect(warnings.some((warning) => warning.includes('active tool "fuzz_move_angles"'))).toBe(
       true,
     );
   });

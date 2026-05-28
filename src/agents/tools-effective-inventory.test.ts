@@ -316,8 +316,8 @@ describe("resolveEffectiveToolInventory", () => {
       tools: [
         mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
         mockTool({
-          name: "dofbot_move_angles",
-          label: "Dofbot Move Angles",
+          name: "fuzz_move_angles",
+          label: "Fuzz Move Angles",
           description: "Move robot joints",
           parameters: {
             type: "object",
@@ -327,7 +327,7 @@ describe("resolveEffectiveToolInventory", () => {
           },
         }),
       ],
-      pluginMeta: { dofbot_move_angles: { pluginId: "dofbot" } },
+      pluginMeta: { fuzz_move_angles: { pluginId: "fuzzplugin" } },
     });
 
     const result = resolveEffectiveToolInventory({ cfg: {} });
@@ -335,10 +335,10 @@ describe("resolveEffectiveToolInventory", () => {
     expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
     expect(result.notices).toEqual([
       {
-        id: "unsupported-tool-schema:dofbot_move_angles",
+        id: "unsupported-tool-schema:fuzz_move_angles",
         severity: "warning",
         message:
-          'Tool "dofbot_move_angles" from plugin "dofbot" has an unsupported runtime input schema (dofbot_move_angles.parameters.properties.target.$dynamicRef) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
+          'Tool "fuzz_move_angles" from plugin "fuzzplugin" has an unsupported runtime input schema (fuzz_move_angles.parameters.properties.target.$dynamicRef) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
       },
     ]);
   });
