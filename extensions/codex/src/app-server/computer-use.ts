@@ -7,13 +7,7 @@ import {
   type CodexComputerUseConfig,
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
-import type {
-  CodexMcpServerStatus,
-  CodexPluginDetail,
-  CodexPluginReadResponse,
-  CodexRequestObject,
-  JsonValue,
-} from "./protocol.js";
+import type { CodexMcpServerStatus, CodexRequestObject, JsonValue } from "./protocol.js";
 import { requestCodexAppServerJson } from "./request.js";
 
 export type CodexComputerUseRequest = <T = JsonValue | undefined>(
@@ -88,7 +82,7 @@ type MarketplaceResolution = {
 type PluginInspection =
   | {
       ok: true;
-      plugin: CodexPluginDetail;
+      plugin: ComputerUsePluginDetail;
     }
   | {
       ok: false;
@@ -98,12 +92,21 @@ type PluginInspection =
 type PluginReadResult =
   | {
       ok: true;
-      plugin: CodexPluginDetail;
+      plugin: ComputerUsePluginDetail;
     }
   | {
       ok: false;
       message: string;
     };
+
+type ComputerUsePluginDetail = {
+  marketplaceName?: string;
+  marketplacePath?: string;
+  summary: {
+    installed: boolean;
+    enabled: boolean;
+  };
+};
 
 const CURATED_MARKETPLACE_POLL_INTERVAL_MS = 2_000;
 const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = ["openai-bundled", "openai-curated", "local"];
@@ -325,7 +328,7 @@ function pluginCheckFailure(
 async function readComputerUseTools(params: {
   request: CodexComputerUseRequest;
   config: ResolvedCodexComputerUseConfig;
-  plugin: CodexPluginDetail;
+  plugin: ComputerUsePluginDetail;
   installPlugin: boolean;
 }): Promise<CodexComputerUseStatus> {
   let server = await readMcpServerStatus(params.request, params.config.mcpServerName);
@@ -563,14 +566,39 @@ async function readComputerUsePlugin(
   pluginName: string,
 ): Promise<PluginReadResult> {
   try {
-    const response = await request<CodexPluginReadResponse>(
+    const response = await request<unknown>(
       "plugin/read",
       pluginRequestParams(marketplace, pluginName),
     );
-    return { ok: true, plugin: response.plugin };
+    const responseRecord = asRecord(response);
+    const plugin = responseRecord ? readRecordField(responseRecord, "plugin") : undefined;
+    return normalizeComputerUsePluginDetail(plugin, pluginName);
   } catch {
     return { ok: false, message: `${pluginName} plugin detail is unreadable` };
   }
+}
+
+function normalizeComputerUsePluginDetail(value: unknown, pluginName: string): PluginReadResult {
+  const plugin = asRecord(value);
+  if (!plugin) {
+    return { ok: false, message: `${pluginName} plugin detail is unreadable` };
+  }
+  const summary = readRecordField(plugin, "summary");
+  const installed = summary ? readBooleanField(summary, "installed") : undefined;
+  const enabled = summary ? readBooleanField(summary, "enabled") : undefined;
+  if (installed === undefined || enabled === undefined) {
+    return { ok: false, message: `${pluginName} plugin summary is unreadable` };
+  }
+  const marketplaceName = readStringField(plugin, "marketplaceName");
+  const marketplacePath = readStringField(plugin, "marketplacePath");
+  return {
+    ok: true,
+    plugin: {
+      summary: { installed, enabled },
+      ...(marketplaceName ? { marketplaceName } : {}),
+      ...(marketplacePath ? { marketplacePath } : {}),
+    },
+  };
 }
 
 async function readMcpServerStatus(
@@ -629,7 +657,7 @@ function pluginRequestParams(marketplace: MarketplaceRef, pluginName: string) {
 }
 
 function pluginSetupReason(
-  plugin: CodexPluginDetail,
+  plugin: ComputerUsePluginDetail,
   marketplace: MarketplaceRef,
 ): CodexComputerUseStatusReason {
   if (marketplace.kind === "remote") {
@@ -640,7 +668,7 @@ function pluginSetupReason(
 
 function pluginSetupMessage(
   config: ResolvedCodexComputerUseConfig,
-  plugin: CodexPluginDetail,
+  plugin: ComputerUsePluginDetail,
   marketplace: MarketplaceRef,
 ): string {
   if (marketplace.kind === "remote") {
@@ -653,7 +681,7 @@ function pluginSetupMessage(
 }
 
 function remoteInstallUnsupportedMessage(
-  plugin: CodexPluginDetail,
+  plugin: ComputerUsePluginDetail,
   marketplace: MarketplaceRef,
 ): string {
   const marketplaceName = marketplace.name ?? plugin.marketplaceName;
@@ -663,7 +691,7 @@ function remoteInstallUnsupportedMessage(
 
 function statusFromPlugin(params: {
   config: ResolvedCodexComputerUseConfig;
-  plugin: CodexPluginDetail;
+  plugin: ComputerUsePluginDetail;
   tools: string[];
   reason: CodexComputerUseStatusReason;
   message: string;
@@ -781,6 +809,15 @@ function readStringField(record: Record<string, unknown>, key: string): string |
   try {
     const value = record[key];
     return typeof value === "string" && value.trim() ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readBooleanField(record: Record<string, unknown>, key: string): boolean | undefined {
+  try {
+    const value = record[key];
+    return typeof value === "boolean" ? value : undefined;
   } catch {
     return undefined;
   }

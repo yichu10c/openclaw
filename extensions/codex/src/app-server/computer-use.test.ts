@@ -137,6 +137,28 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "plugin/install");
   });
 
+  it("fails closed when Computer Use plugin summary is unreadable during install", async () => {
+    const request = createComputerUseRequest({
+      installed: false,
+      unreadablePluginSummary: true,
+    });
+
+    await expectSetupErrorStatus(
+      installCodexComputerUse({
+        pluginConfig: { computerUse: { marketplaceName: "desktop-tools" } },
+        request,
+      }),
+      {
+        ready: false,
+        reason: "check_failed",
+        installed: false,
+        pluginEnabled: false,
+        message: "Computer Use plugin check failed: computer-use plugin summary is unreadable",
+      },
+    );
+    expectRequestMethodNotCalled(request, "plugin/install");
+  });
+
   it("does not register marketplace sources during status checks", async () => {
     const request = createComputerUseRequest({ installed: true });
 
@@ -535,6 +557,7 @@ function createComputerUseRequest(params: {
   marketplaceAvailableAfterListCalls?: number;
   unreadableMcpTools?: boolean;
   unreadablePluginDetail?: boolean;
+  unreadablePluginSummary?: boolean;
 }): CodexComputerUseRequest {
   let installed = params.installed;
   let enabled = params.enabled ?? installed;
@@ -578,16 +601,24 @@ function createComputerUseRequest(params: {
           },
         };
       }
+      const plugin = {
+        marketplaceName: "desktop-tools",
+        marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+        summary: pluginSummary(installed, "desktop-tools", enabled),
+        description: "Control desktop apps.",
+        skills: [],
+        apps: [],
+        mcpServers: ["computer-use"],
+      };
+      if (params.unreadablePluginSummary) {
+        Object.defineProperty(plugin, "summary", {
+          get() {
+            throw new Error("fuzzplugin computer-use plugin summary read failed");
+          },
+        });
+      }
       return {
-        plugin: {
-          marketplaceName: "desktop-tools",
-          marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
-          summary: pluginSummary(installed, "desktop-tools", enabled),
-          description: "Control desktop apps.",
-          skills: [],
-          apps: [],
-          mcpServers: ["computer-use"],
-        },
+        plugin,
       };
     }
     if (method === "plugin/install") {
