@@ -39,6 +39,34 @@ function normalizeQmdSessionStem(stem: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+function readSessionStoreEntries(
+  store: Record<string, SessionEntry>,
+): Array<[string, SessionEntry]> | undefined {
+  let keys: string[];
+  try {
+    keys = Object.keys(store);
+  } catch {
+    return undefined;
+  }
+  const entries: Array<[string, SessionEntry]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, store[key]]);
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
+function readSessionEntryField(entry: SessionEntry, key: "sessionFile" | "sessionId"): unknown {
+  try {
+    return entry[key];
+  } catch {
+    return undefined;
+  }
+}
+
 export type SessionTranscriptHitIdentity = {
   stem: string;
   liveStem?: string;
@@ -118,12 +146,13 @@ export function resolveTranscriptStemToSessionKeys(params: {
   allowQmdSlugFallback?: boolean;
 }): string[] {
   const { store } = params;
+  const entries = readSessionStoreEntries(store);
   const matches: string[] = [];
   const stemAsFile = params.stem.endsWith(".jsonl") ? params.stem : `${params.stem}.jsonl`;
   const parsedStemId = parseUsageCountedSessionIdFromFileName(stemAsFile);
 
-  for (const [sessionKey, entry] of Object.entries(store)) {
-    const sessionFile = normalizeOptionalString(entry.sessionFile);
+  for (const [sessionKey, entry] of entries ?? []) {
+    const sessionFile = normalizeOptionalString(readSessionEntryField(entry, "sessionFile"));
     if (sessionFile) {
       const base = path.basename(sessionFile);
       const fileStem = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
@@ -132,7 +161,8 @@ export function resolveTranscriptStemToSessionKeys(params: {
         continue;
       }
     }
-    if (entry.sessionId === params.stem || (parsedStemId && entry.sessionId === parsedStemId)) {
+    const sessionId = readSessionEntryField(entry, "sessionId");
+    if (sessionId === params.stem || (parsedStemId && sessionId === parsedStemId)) {
       matches.push(sessionKey);
     }
   }
@@ -142,8 +172,8 @@ export function resolveTranscriptStemToSessionKeys(params: {
   }
   const normalizedStem = normalizeQmdSessionStem(params.stem);
   if (params.allowQmdSlugFallback === true && normalizedStem) {
-    for (const [sessionKey, entry] of Object.entries(store)) {
-      const sessionFile = normalizeOptionalString(entry.sessionFile);
+    for (const [sessionKey, entry] of entries ?? []) {
+      const sessionFile = normalizeOptionalString(readSessionEntryField(entry, "sessionFile"));
       if (sessionFile) {
         const base = path.basename(sessionFile);
         const fileStem = base.endsWith(".jsonl") ? base.slice(0, -".jsonl".length) : base;
@@ -152,7 +182,7 @@ export function resolveTranscriptStemToSessionKeys(params: {
           continue;
         }
       }
-      const entrySessionId = normalizeOptionalString(entry.sessionId);
+      const entrySessionId = normalizeOptionalString(readSessionEntryField(entry, "sessionId"));
       if (entrySessionId && normalizeQmdSessionStem(entrySessionId) === normalizedStem) {
         matches.push(sessionKey);
       }

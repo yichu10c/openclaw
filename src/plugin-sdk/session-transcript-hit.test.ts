@@ -271,4 +271,47 @@ describe("resolveTranscriptStemToSessionKeys", () => {
       }),
     ).toEqual([]);
   });
+
+  it("bounds hostile session store and entry field reads", () => {
+    const unreadableStore = new Proxy(
+      {
+        "agent:main:mock": baseEntry({
+          sessionId: "mockplugin-session",
+          sessionFile: "/data/sessions/mockplugin-session.jsonl",
+        }),
+      },
+      {
+        ownKeys() {
+          throw new Error("fuzzplugin store ownKeys");
+        },
+      },
+    ) as Record<string, SessionEntry>;
+
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store: unreadableStore,
+        stem: "deleted-session",
+        archivedOwnerAgentId: "mock",
+      }),
+    ).toEqual(["agent:mock:deleted-session"]);
+
+    const store: Record<string, SessionEntry> = {
+      "agent:main:fuzz": new Proxy(baseEntry({ sessionId: "fuzzplugin-session" }), {
+        get(target, property, receiver) {
+          if (property === "sessionFile") {
+            throw new Error("fuzzplugin sessionFile getter");
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+      "agent:main:mock": baseEntry({
+        sessionId: "mockplugin-session",
+        sessionFile: "/data/sessions/mockplugin-session.jsonl",
+      }),
+    };
+
+    expect(resolveTranscriptStemToSessionKeys({ store, stem: "mockplugin-session" })).toEqual([
+      "agent:main:mock",
+    ]);
+  });
 });
