@@ -42,6 +42,97 @@ const EMPTY_PLUGIN_MANIFEST_REGISTRY: PluginManifestRegistry = {
   diagnostics: [],
 };
 
+function readConfigValue(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  try {
+    return (value as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function hasConfigKey(value: unknown, key: string): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  try {
+    return Object.prototype.hasOwnProperty.call(value, key);
+  } catch {
+    return false;
+  }
+}
+
+function copyConfigArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length = 0;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    let hasEntry = true;
+    try {
+      hasEntry = index in value;
+    } catch {
+      hasEntry = true;
+    }
+    if (!hasEntry) {
+      continue;
+    }
+    try {
+      entries.push(value[index]);
+    } catch {
+      // Treat unreadable config-list entries as absent; readable siblings still apply.
+    }
+  }
+  return entries;
+}
+
+function copyConfigRecordKeys(value: unknown): string[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  try {
+    return Object.keys(value);
+  } catch {
+    return [];
+  }
+}
+
+function copyConfigRecordEntries(value: unknown): Array<[string, unknown]> {
+  const entries: Array<[string, unknown]> = [];
+  for (const key of copyConfigRecordKeys(value)) {
+    try {
+      entries.push([key, (value as Record<string, unknown>)[key]]);
+    } catch {
+      // Skip unreadable config entries; readable siblings can still drive auto-enable.
+    }
+  }
+  return entries;
+}
+
+function readPluginEntries(cfg: OpenClawConfig): unknown {
+  return readConfigValue(readConfigValue(cfg, "plugins"), "entries");
+}
+
+function readPluginEntry(cfg: OpenClawConfig, pluginId: string): unknown {
+  return readConfigValue(readPluginEntries(cfg), pluginId);
+}
+
+function readPluginEntryConfig(cfg: OpenClawConfig, pluginId: string): unknown {
+  return readConfigValue(readPluginEntry(cfg, pluginId), "config");
+}
+
+function readPluginEntryEnabled(cfg: OpenClawConfig, pluginId: string): unknown {
+  return readConfigValue(readPluginEntry(cfg, pluginId), "enabled");
+}
+
 function resolveAutoEnableProviderPluginIds(
   registry: PluginManifestRegistry,
 ): Readonly<Record<string, string>> {
@@ -131,12 +222,12 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
 }
 
 function hasPluginOwnedWebSearchConfig(cfg: OpenClawConfig, pluginId: string): boolean {
-  const pluginConfig = cfg.plugins?.entries?.[pluginId]?.config;
+  const pluginConfig = readPluginEntryConfig(cfg, pluginId);
   return isRecord(pluginConfig) && isRecord(pluginConfig.webSearch);
 }
 
 function hasPluginOwnedWebFetchConfig(cfg: OpenClawConfig, pluginId: string): boolean {
-  const pluginConfig = cfg.plugins?.entries?.[pluginId]?.config;
+  const pluginConfig = readPluginEntryConfig(cfg, pluginId);
   return isRecord(pluginConfig) && isRecord(pluginConfig.webFetch);
 }
 
@@ -144,19 +235,26 @@ function resolvePluginOwnedToolConfigKeys(plugin: PluginManifestRecord): string[
   if ((plugin.contracts?.tools?.length ?? 0) === 0) {
     return [];
   }
-  const properties = isRecord(plugin.configSchema) ? plugin.configSchema.properties : undefined;
+  const configSchema = readConfigValue(plugin, "configSchema");
+  const properties = isRecord(configSchema)
+    ? readConfigValue(configSchema, "properties")
+    : undefined;
   if (!isRecord(properties)) {
     return [];
   }
-  return Object.keys(properties).filter((key) => key !== "webSearch" && key !== "webFetch");
+  return copyConfigRecordKeys(properties).filter(
+    (key) => key !== "webSearch" && key !== "webFetch",
+  );
 }
 
 function hasPluginOwnedToolConfig(cfg: OpenClawConfig, plugin: PluginManifestRecord): boolean {
-  const pluginConfig = cfg.plugins?.entries?.[plugin.id]?.config;
+  const pluginConfig = readPluginEntryConfig(cfg, plugin.id);
   if (!isRecord(pluginConfig)) {
     return false;
   }
-  return resolvePluginOwnedToolConfigKeys(plugin).some((key) => pluginConfig[key] !== undefined);
+  return resolvePluginOwnedToolConfigKeys(plugin).some(
+    (key) => readConfigValue(pluginConfig, key) !== undefined,
+  );
 }
 
 function resolveProviderPluginsWithOwnedWebSearch(
@@ -320,13 +418,11 @@ function isAutoEnableConfiguredChannelSignal(params: {
 }
 
 function hasConfiguredWebSearchPluginEntry(cfg: OpenClawConfig): boolean {
-  const entries = cfg.plugins?.entries;
-  return (
-    !!entries &&
-    typeof entries === "object" &&
-    Object.values(entries).some(
-      (entry) => isRecord(entry) && isRecord(entry.config) && isRecord(entry.config.webSearch),
-    )
+  return copyConfigRecordEntries(readPluginEntries(cfg)).some(
+    ([, entry]) =>
+      isRecord(entry) &&
+      isRecord(readConfigValue(entry, "config")) &&
+      isRecord(readConfigValue(readConfigValue(entry, "config"), "webSearch")),
   );
 }
 
@@ -338,29 +434,23 @@ function hasConfiguredWebSearchProviderSelection(cfg: OpenClawConfig): boolean {
 }
 
 function hasConfiguredWebFetchPluginEntry(cfg: OpenClawConfig): boolean {
-  const entries = cfg.plugins?.entries;
-  return (
-    !!entries &&
-    typeof entries === "object" &&
-    Object.values(entries).some(
-      (entry) => isRecord(entry) && isRecord(entry.config) && isRecord(entry.config.webFetch),
-    )
+  return copyConfigRecordEntries(readPluginEntries(cfg)).some(
+    ([, entry]) =>
+      isRecord(entry) &&
+      isRecord(readConfigValue(entry, "config")) &&
+      isRecord(readConfigValue(readConfigValue(entry, "config"), "webFetch")),
   );
 }
 
 function hasConfiguredPluginConfigEntry(cfg: OpenClawConfig): boolean {
-  const entries = cfg.plugins?.entries;
-  return (
-    !!entries &&
-    typeof entries === "object" &&
-    Object.values(entries).some((entry) => isRecord(entry) && isRecord(entry.config))
+  return copyConfigRecordEntries(readPluginEntries(cfg)).some(
+    ([, entry]) => isRecord(entry) && isRecord(readConfigValue(entry, "config")),
   );
 }
 
 function listContainsNormalized(value: unknown, expected: string): boolean {
-  return (
-    Array.isArray(value) &&
-    value.some((entry) => normalizeOptionalLowercaseString(entry) === expected)
+  return copyConfigArrayEntries(value).some(
+    (entry) => normalizeOptionalLowercaseString(entry) === expected,
   );
 }
 
@@ -377,28 +467,23 @@ function hasBrowserToolReference(cfg: OpenClawConfig): boolean {
     return true;
   }
   const agentList = cfg.agents?.list;
-  return Array.isArray(agentList)
-    ? agentList.some((entry) => isRecord(entry) && toolPolicyReferencesBrowser(entry.tools))
-    : false;
+  return copyConfigArrayEntries(agentList).some(
+    (entry) => isRecord(entry) && toolPolicyReferencesBrowser(readConfigValue(entry, "tools")),
+  );
 }
 
 function collectConfiguredPluginEntryIds(cfg: OpenClawConfig): string[] {
-  const entries = cfg.plugins?.entries;
-  if (!entries || typeof entries !== "object") {
-    return [];
-  }
-  return Object.keys(entries)
+  return copyConfigRecordKeys(readPluginEntries(cfg))
     .map((pluginId) => pluginId.trim())
     .filter((pluginId) => pluginId && !isPluginEntryExplicitlyDisabled(cfg, pluginId));
 }
 
 function hasOwnPluginEntry(cfg: OpenClawConfig, pluginId: string): boolean {
-  const entries = cfg.plugins?.entries;
-  return !!entries && typeof entries === "object" && Object.hasOwn(entries, pluginId);
+  return hasConfigKey(readPluginEntries(cfg), pluginId);
 }
 
 function isPluginEntryExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
-  return cfg.plugins?.entries?.[pluginId]?.enabled === false;
+  return readPluginEntryEnabled(cfg, pluginId) === false;
 }
 
 function hasNonDisabledPluginEntry(cfg: OpenClawConfig, pluginId: string): boolean {
@@ -440,7 +525,7 @@ function hasXaiSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
   if (isPluginEntryExplicitlyDisabled(cfg, "xai")) {
     return false;
   }
-  const pluginConfig = cfg.plugins?.entries?.xai?.config;
+  const pluginConfig = readPluginEntryConfig(cfg, "xai");
   return (
     (isRecord(pluginConfig) &&
       (isRecord(pluginConfig.xSearch) || isRecord(pluginConfig.codeExecution))) ||
@@ -472,30 +557,23 @@ function hasSetupAutoEnableRelevantConfig(cfg: OpenClawConfig): boolean {
 }
 
 function hasPluginEntries(cfg: OpenClawConfig): boolean {
-  const entries = cfg.plugins?.entries;
-  return !!entries && typeof entries === "object" && Object.keys(entries).length > 0;
+  return copyConfigRecordKeys(readPluginEntries(cfg)).length > 0;
 }
 
 function hasPluginAllowlistWithMaterialEntries(cfg: OpenClawConfig): boolean {
-  if (
-    !Array.isArray(cfg.plugins?.allow) ||
-    cfg.plugins.allow.length === 0 ||
-    !hasPluginEntries(cfg)
-  ) {
+  if (copyConfigArrayEntries(cfg.plugins?.allow).length === 0 || !hasPluginEntries(cfg)) {
     return false;
   }
-  const entries = cfg.plugins?.entries;
-  if (!entries || typeof entries !== "object") {
-    return false;
-  }
-  return Object.values(entries).some(hasMaterialPluginEntryConfig);
+  return copyConfigRecordEntries(readPluginEntries(cfg)).some(([, entry]) =>
+    hasMaterialPluginEntryConfig(entry),
+  );
 }
 
 function hasConfiguredProviderModelOrHarness(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  if (cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) {
+  if (copyConfigRecordKeys(cfg.auth?.profiles).length > 0) {
     return true;
   }
-  if (cfg.models?.providers && Object.keys(cfg.models.providers).length > 0) {
+  if (copyConfigRecordKeys(cfg.models?.providers).length > 0) {
     return true;
   }
   if (collectConfiguredModelRefs(cfg, { includeChannelModelOverrides: false }).length > 0) {
@@ -528,7 +606,7 @@ function configMayNeedPluginManifestRegistry(cfg: OpenClawConfig, env: NodeJS.Pr
   if (!configuredChannels || typeof configuredChannels !== "object") {
     return false;
   }
-  for (const key of Object.keys(configuredChannels)) {
+  for (const key of copyConfigRecordKeys(configuredChannels)) {
     if (key === "defaults" || key === "modelByChannel") {
       continue;
     }
@@ -744,30 +822,28 @@ function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): bool
   const builtInChannelId = normalizeChatChannelId(pluginId);
   if (builtInChannelId) {
     const channels = cfg.channels as Record<string, unknown> | undefined;
-    const channelConfig = channels?.[builtInChannelId];
+    const channelConfig = readConfigValue(channels, builtInChannelId);
     if (
       channelConfig &&
       typeof channelConfig === "object" &&
       !Array.isArray(channelConfig) &&
-      (channelConfig as { enabled?: unknown }).enabled === false
+      readConfigValue(channelConfig, "enabled") === false
     ) {
       return true;
     }
   }
-  return cfg.plugins?.entries?.[pluginId]?.enabled === false;
+  return readPluginEntryEnabled(cfg, pluginId) === false;
 }
 
 function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
-  const deny = cfg.plugins?.deny;
-  return Array.isArray(deny) && deny.includes(pluginId);
+  return copyConfigArrayEntries(cfg.plugins?.deny).includes(pluginId);
 }
 
 function isPluginExplicitlySelected(cfg: OpenClawConfig, pluginId: string): boolean {
-  const allow = cfg.plugins?.allow;
-  if (Array.isArray(allow) && allow.includes(pluginId)) {
+  if (copyConfigArrayEntries(cfg.plugins?.allow).includes(pluginId)) {
     return true;
   }
-  return hasMaterialPluginEntryConfig(cfg.plugins?.entries?.[pluginId]);
+  return hasMaterialPluginEntryConfig(readPluginEntry(cfg, pluginId));
 }
 
 function disableImplicitPreferredOverPlugin(params: {
@@ -785,15 +861,16 @@ function disableImplicitPreferredOverPlugin(params: {
   ) {
     return params.config;
   }
-  const existingEntry = params.config.plugins?.entries?.[params.pluginId];
+  const existingEntry = readPluginEntry(params.config, params.pluginId);
+  const entries = Object.fromEntries(copyConfigRecordEntries(readPluginEntries(params.config)));
   return {
     ...params.config,
     plugins: {
       ...params.config.plugins,
       entries: {
-        ...params.config.plugins?.entries,
+        ...entries,
         [params.pluginId]: {
-          ...(existingEntry && typeof existingEntry === "object" ? existingEntry : {}),
+          ...Object.fromEntries(copyConfigRecordEntries(existingEntry)),
           enabled: false,
         },
       },
@@ -865,9 +942,9 @@ function registerPluginEntry(
     plugins: {
       ...cfg.plugins,
       entries: {
-        ...cfg.plugins?.entries,
+        ...Object.fromEntries(copyConfigRecordEntries(readPluginEntries(cfg))),
         [entry.pluginId]: {
-          ...(cfg.plugins?.entries?.[entry.pluginId] as Record<string, unknown> | undefined),
+          ...Object.fromEntries(copyConfigRecordEntries(readPluginEntry(cfg, entry.pluginId))),
           enabled: true,
         },
       },
@@ -880,13 +957,13 @@ function hasMaterialPluginEntryConfig(entry: unknown): boolean {
     return false;
   }
   return (
-    entry.enabled === true ||
-    isRecord(entry.config) ||
-    isRecord(entry.hooks) ||
-    isRecord(entry.subagent) ||
-    isRecord(entry.llm) ||
-    entry.apiKey !== undefined ||
-    entry.env !== undefined
+    readConfigValue(entry, "enabled") === true ||
+    isRecord(readConfigValue(entry, "config")) ||
+    isRecord(readConfigValue(entry, "hooks")) ||
+    isRecord(readConfigValue(entry, "subagent")) ||
+    isRecord(readConfigValue(entry, "llm")) ||
+    readConfigValue(entry, "apiKey") !== undefined ||
+    readConfigValue(entry, "env") !== undefined
   );
 }
 
@@ -904,20 +981,20 @@ function materializeConfiguredPluginEntryAllowlist(params: {
 }): OpenClawConfig {
   let next = params.config;
   const allow = next.plugins?.allow;
-  const entries = next.plugins?.entries;
-  if (!Array.isArray(allow) || allow.length === 0 || !entries || typeof entries !== "object") {
+  const entries = readPluginEntries(next);
+  if (copyConfigArrayEntries(allow).length === 0 || copyConfigRecordKeys(entries).length === 0) {
     return next;
   }
 
-  for (const pluginId of Object.keys(entries).toSorted((left, right) =>
+  for (const pluginId of copyConfigRecordKeys(entries).toSorted((left, right) =>
     left.localeCompare(right),
   )) {
-    const entry = entries[pluginId];
+    const entry = readConfigValue(entries, pluginId);
     if (
       !hasMaterialPluginEntryConfig(entry) ||
       isPluginDenied(next, pluginId) ||
       isPluginExplicitlyDisabled(next, pluginId) ||
-      allow.includes(pluginId) ||
+      copyConfigArrayEntries(allow).includes(pluginId) ||
       !isKnownPluginId(pluginId, params.manifestRegistry)
     ) {
       continue;

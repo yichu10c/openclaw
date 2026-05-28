@@ -979,6 +979,62 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.changes).toContain("discord plugin config present, added to plugin allowlist.");
   });
 
+  it("skips unreadable synthetic plugin entries during auto-enable readiness", () => {
+    const entries: Record<string, unknown> = {
+      mockplugin: {
+        enabled: true,
+      },
+    };
+    Object.defineProperty(entries, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable plugin entry");
+      },
+    });
+
+    const result = applyPluginAutoEnable({
+      config: {
+        plugins: { entries },
+      },
+      env,
+    });
+
+    expect(result.changes).toStrictEqual([]);
+  });
+
+  it("allowlists readable synthetic plugin entries when siblings are unreadable", () => {
+    const entries: Record<string, unknown> = {
+      mockplugin: {
+        config: {
+          token: "x",
+        },
+      },
+    };
+    Object.defineProperty(entries, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable plugin entry");
+      },
+    });
+
+    const result = materializePluginAutoEnableCandidates({
+      config: {
+        plugins: {
+          allow: ["existing"],
+          entries,
+        },
+      },
+      candidates: [],
+      env,
+      manifestRegistry: makeRegistry([{ id: "mockplugin", channels: [] }]),
+    });
+
+    expect(result.config.plugins?.allow).toEqual(["existing", "mockplugin"]);
+    expect(result.changes).toContain(
+      "mockplugin plugin config present, added to plugin allowlist.",
+    );
+  });
+
   it("does not preserve stale configured plugin entries in restrictive plugins.allow", () => {
     const result = materializePluginAutoEnableCandidates({
       config: {
