@@ -14,6 +14,108 @@ export type ChannelEntryMatch<T> = {
   matchSource?: ChannelMatchSource;
 };
 
+type RecordEntryRead<T> =
+  | { exists: false; readable: false }
+  | { exists: true; readable: true; entry: T }
+  | { exists: true; readable: false };
+
+function copyStringKeys(keys: readonly string[] | undefined): string[] {
+  if (!Array.isArray(keys)) {
+    return [];
+  }
+  let length = 0;
+  try {
+    length = keys.length;
+  } catch {
+    return [];
+  }
+  const copied: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    let hasEntry = true;
+    try {
+      hasEntry = index in keys;
+    } catch {
+      hasEntry = true;
+    }
+    if (!hasEntry) {
+      continue;
+    }
+    try {
+      const key = keys[index];
+      if (typeof key === "string") {
+        copied.push(key);
+      }
+    } catch {
+      // Treat unreadable key candidates as absent; later candidates can still match.
+    }
+  }
+  return copied;
+}
+
+function readRecordEntry<T>(
+  entries: Record<string, T> | undefined,
+  key: string,
+): RecordEntryRead<T> {
+  if (!entries || typeof entries !== "object") {
+    return { exists: false, readable: false };
+  }
+  try {
+    if (!Object.prototype.hasOwnProperty.call(entries, key)) {
+      return { exists: false, readable: false };
+    }
+  } catch {
+    return { exists: true, readable: false };
+  }
+  try {
+    return { exists: true, readable: true, entry: entries[key] };
+  } catch {
+    return { exists: true, readable: false };
+  }
+}
+
+function copyRecordKeys<T>(entries: Record<string, T> | undefined): string[] {
+  if (!entries || typeof entries !== "object") {
+    return [];
+  }
+  try {
+    return Object.keys(entries);
+  } catch {
+    return [];
+  }
+}
+
+function normalizeKeySafely(normalizeKey: (value: string) => string, value: string): string {
+  try {
+    return normalizeKey(value);
+  } catch {
+    return "";
+  }
+}
+
+function findNormalizedEntryMatch<T>(params: {
+  entries?: Record<string, T>;
+  normalizedKeys: readonly string[];
+  normalizeKey: (value: string) => string;
+}): ChannelEntryMatch<T> | null {
+  for (const entryKey of copyRecordKeys(params.entries)) {
+    const normalizedEntry = normalizeKeySafely(params.normalizeKey, entryKey);
+    if (!normalizedEntry || !params.normalizedKeys.includes(normalizedEntry)) {
+      continue;
+    }
+    const read = readRecordEntry(params.entries, entryKey);
+    const match: ChannelEntryMatch<T> = { key: entryKey };
+    if (read.exists && read.readable) {
+      match.entry = read.entry;
+    }
+    return match;
+  }
+  return null;
+}
+
+function hasAssignedEntry<T>(match: ChannelEntryMatch<T>): boolean {
+  return Object.prototype.hasOwnProperty.call(match, "entry");
+}
+
 export function applyChannelMatchMeta<
   TResult extends { matchKey?: string; matchSource?: ChannelMatchSource },
 >(result: TResult, match: ChannelEntryMatch<unknown>): TResult {
@@ -50,19 +152,30 @@ export function resolveChannelEntryMatch<T>(params: {
   keys: string[];
   wildcardKey?: string;
 }): ChannelEntryMatch<T> {
-  const entries = params.entries ?? {};
   const match: ChannelEntryMatch<T> = {};
-  for (const key of params.keys) {
-    if (!Object.prototype.hasOwnProperty.call(entries, key)) {
+  for (const key of copyStringKeys(params.keys)) {
+    const read = readRecordEntry(params.entries, key);
+    if (!read.exists) {
       continue;
     }
-    match.entry = entries[key];
     match.key = key;
+    if (read.readable) {
+      match.entry = read.entry;
+    }
     break;
   }
-  if (params.wildcardKey && Object.prototype.hasOwnProperty.call(entries, params.wildcardKey)) {
-    match.wildcardEntry = entries[params.wildcardKey];
+  if (match.key && !hasAssignedEntry(match)) {
+    return match;
+  }
+  if (params.wildcardKey) {
+    const wildcard = readRecordEntry(params.entries, params.wildcardKey);
+    if (!wildcard.exists) {
+      return match;
+    }
     match.wildcardKey = params.wildcardKey;
+    if (wildcard.readable) {
+      match.wildcardEntry = wildcard.entry;
+    }
   }
   return match;
 }
@@ -74,65 +187,81 @@ export function resolveChannelEntryMatchWithFallback<T>(params: {
   wildcardKey?: string;
   normalizeKey?: (value: string) => string;
 }): ChannelEntryMatch<T> {
+  const keys = copyStringKeys(params.keys);
   const direct = resolveChannelEntryMatch({
     entries: params.entries,
-    keys: params.keys,
+    keys,
     wildcardKey: params.wildcardKey,
   });
 
-  if (direct.entry && direct.key) {
-    return { ...direct, matchKey: direct.key, matchSource: "direct" };
+  if (direct.key) {
+    if (!hasAssignedEntry(direct)) {
+      return { key: direct.key };
+    }
+    if (direct.entry) {
+      return { ...direct, matchKey: direct.key, matchSource: "direct" };
+    }
   }
 
   const normalizeKey = params.normalizeKey;
   if (normalizeKey) {
-    const normalizedKeys = params.keys.map((key) => normalizeKey(key)).filter(Boolean);
+    const normalizedKeys = keys.map((key) => normalizeKeySafely(normalizeKey, key)).filter(Boolean);
     if (normalizedKeys.length > 0) {
-      for (const [entryKey, entry] of Object.entries(params.entries ?? {})) {
-        const normalizedEntry = normalizeKey(entryKey);
-        if (normalizedEntry && normalizedKeys.includes(normalizedEntry)) {
-          return {
-            ...direct,
-            entry,
-            key: entryKey,
-            matchKey: entryKey,
-            matchSource: "direct",
-          };
-        }
+      const normalizedMatch = findNormalizedEntryMatch({
+        entries: params.entries,
+        normalizedKeys,
+        normalizeKey,
+      });
+      if (normalizedMatch) {
+        return hasAssignedEntry(normalizedMatch)
+          ? { ...normalizedMatch, matchKey: normalizedMatch.key, matchSource: "direct" }
+          : { key: normalizedMatch.key };
       }
     }
   }
 
-  const parentKeys = params.parentKeys ?? [];
+  const parentKeys = copyStringKeys(params.parentKeys);
   if (parentKeys.length > 0) {
     const parent = resolveChannelEntryMatch({ entries: params.entries, keys: parentKeys });
-    if (parent.entry && parent.key) {
-      return {
-        ...direct,
-        entry: parent.entry,
-        key: parent.key,
-        parentEntry: parent.entry,
-        parentKey: parent.key,
-        matchKey: parent.key,
-        matchSource: "parent",
-      };
+    if (parent.key) {
+      if (!hasAssignedEntry(parent)) {
+        return { key: parent.key, parentKey: parent.key };
+      }
+      if (parent.entry) {
+        return {
+          ...direct,
+          entry: parent.entry,
+          key: parent.key,
+          parentEntry: parent.entry,
+          parentKey: parent.key,
+          matchKey: parent.key,
+          matchSource: "parent",
+        };
+      }
     }
     if (normalizeKey) {
-      const normalizedParentKeys = parentKeys.map((key) => normalizeKey(key)).filter(Boolean);
+      const normalizedParentKeys = parentKeys
+        .map((key) => normalizeKeySafely(normalizeKey, key))
+        .filter(Boolean);
       if (normalizedParentKeys.length > 0) {
-        for (const [entryKey, entry] of Object.entries(params.entries ?? {})) {
-          const normalizedEntry = normalizeKey(entryKey);
-          if (normalizedEntry && normalizedParentKeys.includes(normalizedEntry)) {
-            return {
-              ...direct,
-              entry,
-              key: entryKey,
-              parentEntry: entry,
-              parentKey: entryKey,
-              matchKey: entryKey,
-              matchSource: "parent",
-            };
+        const normalizedParent = findNormalizedEntryMatch({
+          entries: params.entries,
+          normalizedKeys: normalizedParentKeys,
+          normalizeKey,
+        });
+        if (normalizedParent) {
+          if (!hasAssignedEntry(normalizedParent)) {
+            return { key: normalizedParent.key, parentKey: normalizedParent.key };
           }
+          return {
+            ...direct,
+            entry: normalizedParent.entry,
+            key: normalizedParent.key,
+            parentEntry: normalizedParent.entry,
+            parentKey: normalizedParent.key,
+            matchKey: normalizedParent.key,
+            matchSource: "parent",
+          };
         }
       }
     }

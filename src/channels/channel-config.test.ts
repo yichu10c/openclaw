@@ -40,6 +40,62 @@ describe("resolveChannelEntryMatch", () => {
     expect(match.wildcardEntry).toBe(entries["*"]);
     expect(match.wildcardKey).toBe("*");
   });
+
+  it("does not throw when a matched entry getter fails", () => {
+    const entries: Record<string, { allow: boolean }> = { "*": { allow: true } };
+    Object.defineProperty(entries, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable config");
+      },
+    });
+
+    const match = resolveChannelEntryMatch({
+      entries,
+      keys: ["fuzzplugin"],
+      wildcardKey: "*",
+    });
+
+    expect(match).toEqual({ key: "fuzzplugin" });
+  });
+
+  it("keeps direct matches when wildcard entry getters fail", () => {
+    const direct = { allow: true };
+    const entries: Record<string, { allow: boolean }> = { mockplugin: direct };
+    Object.defineProperty(entries, "*", {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable wildcard");
+      },
+    });
+
+    const match = resolveChannelEntryMatch({
+      entries,
+      keys: ["mockplugin"],
+      wildcardKey: "*",
+    });
+
+    expect(match.entry).toBe(direct);
+    expect(match.key).toBe("mockplugin");
+    expect(match.wildcardEntry).toBeUndefined();
+    expect(match.wildcardKey).toBe("*");
+  });
+
+  it("preserves wildcard metadata for readable nullish direct entries", () => {
+    const wildcard = { allow: true };
+    const entries: Record<string, unknown> = { fuzzplugin: null, "*": wildcard };
+
+    const match = resolveChannelEntryMatch({
+      entries,
+      keys: ["fuzzplugin"],
+      wildcardKey: "*",
+    });
+
+    expect(match.entry).toBeNull();
+    expect(match.key).toBe("fuzzplugin");
+    expect(match.wildcardEntry).toBe(wildcard);
+    expect(match.wildcardKey).toBe("*");
+  });
 });
 
 describe("resolveChannelEntryMatchWithFallback", () => {
@@ -101,6 +157,126 @@ describe("resolveChannelEntryMatchWithFallback", () => {
     expect(match.entry).toBe(entries["My Team"]);
     expect(match.matchSource).toBe("direct");
     expect(match.matchKey).toBe("My Team");
+  });
+
+  it("does not fall back to wildcard when a direct entry is unreadable", () => {
+    const entries: Record<string, { allow: boolean }> = { "*": { allow: true } };
+    Object.defineProperty(entries, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable direct entry");
+      },
+    });
+
+    const match = resolveChannelEntryMatchWithFallback({
+      entries,
+      keys: ["fuzzplugin"],
+      parentKeys: ["mockplugin-parent"],
+      wildcardKey: "*",
+    });
+
+    expect(match).toEqual({ key: "fuzzplugin" });
+    expect(resolveChannelMatchConfig(match, (entry) => entry)).toBeNull();
+  });
+
+  it("keeps wildcard fallback for readable nullish direct entries", () => {
+    const wildcard = { allow: true };
+    const entries: Record<string, unknown> = { fuzzplugin: null, "*": wildcard };
+
+    const match = resolveChannelEntryMatchWithFallback({
+      entries,
+      keys: ["fuzzplugin"],
+      wildcardKey: "*",
+    });
+
+    expect(match.entry).toBe(wildcard);
+    expect(match.key).toBe("*");
+    expect(match.matchSource).toBe("wildcard");
+    expect(match.matchKey).toBe("*");
+  });
+
+  it("keeps parent fallback for readable nullish direct entries", () => {
+    const parent = { allow: true };
+    const entries: Record<string, unknown> = { fuzzplugin: null, mockplugin: parent };
+
+    const match = resolveChannelEntryMatchWithFallback({
+      entries,
+      keys: ["fuzzplugin"],
+      parentKeys: ["mockplugin"],
+    });
+
+    expect(match.entry).toBe(parent);
+    expect(match.key).toBe("mockplugin");
+    expect(match.matchSource).toBe("parent");
+    expect(match.matchKey).toBe("mockplugin");
+  });
+
+  it("does not fall back to wildcard when a normalized direct entry is unreadable", () => {
+    const entries: Record<string, { allow: boolean }> = {
+      "mockplugin-parent": { allow: true },
+      "*": { allow: true },
+    };
+    Object.defineProperty(entries, "Fuzz Plugin", {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable normalized entry");
+      },
+    });
+
+    const match = resolveChannelEntryMatchWithFallback({
+      entries,
+      keys: ["fuzz-plugin"],
+      parentKeys: ["mockplugin-parent"],
+      wildcardKey: "*",
+      normalizeKey: normalizeChannelSlug,
+    });
+
+    expect(match).toEqual({ key: "Fuzz Plugin" });
+    expect(resolveChannelMatchConfig(match, (entry) => entry)).toBeNull();
+  });
+
+  it("skips unreadable normalized misses and keeps scanning later entries", () => {
+    const readable = { allow: true };
+    const entries: Record<string, { allow: boolean }> = {
+      "Fuzz Plugin": { allow: false },
+      "Mock Plugin": readable,
+    };
+    Object.defineProperty(entries, "Fuzz Plugin", {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable miss");
+      },
+    });
+
+    const match = resolveChannelEntryMatchWithFallback({
+      entries,
+      keys: ["mock-plugin"],
+      normalizeKey: normalizeChannelSlug,
+    });
+
+    expect(match.entry).toBe(readable);
+    expect(match.key).toBe("Mock Plugin");
+    expect(match.matchSource).toBe("direct");
+    expect(match.matchKey).toBe("Mock Plugin");
+  });
+
+  it("does not throw when normalized fallback key enumeration fails", () => {
+    const entries = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("ownKeys failed");
+        },
+      },
+    ) as Record<string, { allow: boolean }>;
+
+    const match = resolveChannelEntryMatchWithFallback({
+      entries,
+      keys: ["fuzzplugin"],
+      normalizeKey: normalizeChannelSlug,
+    });
+
+    expect(match).toEqual({});
   });
 });
 
