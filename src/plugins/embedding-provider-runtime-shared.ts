@@ -1,50 +1,57 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolvePluginCapabilityProvider,
   resolvePluginCapabilityProviders,
 } from "./capability-provider-runtime.js";
+import { resolveConfiguredProviderConfig } from "./provider-config-owner.js";
 
 type EmbeddingProviderCapabilityKey = "embeddingProviders" | "memoryEmbeddingProviders";
 type RegisteredAdapterEntry<TAdapter> = {
   adapter: TAdapter;
 };
-type ConfiguredModelProvider = NonNullable<
-  NonNullable<OpenClawConfig["models"]>["providers"]
->[string];
+function readStringProperty(providerConfig: ModelProviderConfig | undefined, key: string): string {
+  if (!providerConfig) {
+    return "";
+  }
+  try {
+    const value = (providerConfig as Record<string, unknown>)[key];
+    return typeof value === "string" ? value : "";
+  } catch {
+    return "";
+  }
+}
 
-function resolveConfiguredProviderConfig(
-  providerId: string,
-  cfg?: OpenClawConfig,
-): ConfiguredModelProvider | undefined {
-  const providers = cfg?.models?.providers;
-  if (!providers) {
+function resolveMissingApiProviderId(
+  resolve: ((providerConfig: ModelProviderConfig) => string | undefined) | undefined,
+  providerConfig: ModelProviderConfig,
+): string | undefined {
+  try {
+    return resolve?.(providerConfig);
+  } catch {
     return undefined;
   }
-  const normalized = normalizeProviderId(providerId);
-  return (
-    providers[providerId] ??
-    Object.entries(providers).find(
-      ([candidateId]) => normalizeProviderId(candidateId) === normalized,
-    )?.[1]
-  );
 }
 
 export function readConfiguredProviderApiId(params: {
   providerId: string;
   cfg?: OpenClawConfig;
   resolveApiProviderId?: (normalizedApiId: string) => string | undefined;
-  resolveMissingApiProviderId?: (providerConfig: ConfiguredModelProvider) => string | undefined;
+  resolveMissingApiProviderId?: (providerConfig: ModelProviderConfig) => string | undefined;
 }): string | undefined {
-  const providerConfig = resolveConfiguredProviderConfig(params.providerId, params.cfg);
+  const providerConfig = resolveConfiguredProviderConfig({
+    provider: params.providerId,
+    config: params.cfg,
+  });
   if (!providerConfig) {
     return undefined;
   }
   const normalized = normalizeProviderId(params.providerId);
-  const api = providerConfig.api?.trim();
+  const api = readStringProperty(providerConfig, "api").trim();
   const resolvedProviderId = api
     ? (params.resolveApiProviderId?.(normalizeProviderId(api)) ?? normalizeProviderId(api))
-    : params.resolveMissingApiProviderId?.(providerConfig);
+    : resolveMissingApiProviderId(params.resolveMissingApiProviderId, providerConfig);
   return resolvedProviderId && resolvedProviderId !== normalized ? resolvedProviderId : undefined;
 }
 

@@ -125,6 +125,32 @@ describe("memory embedding provider runtime resolution", () => {
     expect(mocks.resolvePluginCapabilityProvider).not.toHaveBeenCalled();
   });
 
+  it("skips unreadable provider maps while resolving configured api owners", () => {
+    const fuzzAdapter = createCapabilityAdapter("fuzzplugin");
+    registerMemoryEmbeddingProvider(fuzzAdapter);
+    const config = {
+      models: {
+        providers: new Proxy(
+          {
+            "mock provider": {
+              api: "fuzzplugin",
+              models: [],
+            },
+          },
+          {
+            ownKeys() {
+              throw new Error("fuzzplugin provider keys failed");
+            },
+          },
+        ),
+      },
+    };
+
+    expect(
+      runtimeModule.getMemoryEmbeddingProvider("mock-provider", config as never),
+    ).toBeUndefined();
+  });
+
   it("prefers registered adapters over declared capability fallback adapters with the same id", () => {
     const registered = {
       id: "openai",

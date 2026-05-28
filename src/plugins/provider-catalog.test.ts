@@ -206,6 +206,35 @@ describe("buildSingleProviderApiKeyCatalog", () => {
       providerId: "z.ai",
       buildProvider: () => createProviderConfig({ baseUrl: "https://default.example/zai" }),
     },
+    {
+      name: "uses default base url when explicit provider keys are unreadable",
+      ctx: createCatalogContext({
+        apiKeys: { "mock provider": "secret-key" },
+        config: {
+          models: {
+            providers: new Proxy(
+              {
+                mockprovider: {
+                  baseUrl: " https://override.example/v1/ ",
+                  models: [],
+                },
+              },
+              {
+                ownKeys() {
+                  throw new Error("fuzzplugin provider keys failed");
+                },
+              },
+            ),
+          },
+        } as OpenClawConfig,
+      }),
+      allowExplicitBaseUrl: true,
+      expected: createSingleCatalogProvider({
+        baseUrl: "https://default.example/v1",
+        apiKey: "secret-key",
+      }),
+      providerId: "mock provider",
+    },
   ] as const)(
     "$name",
     async ({ ctx, allowExplicitBaseUrl, expected, providerId, buildProvider }) => {

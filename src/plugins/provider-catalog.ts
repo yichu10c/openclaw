@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { resolveConfiguredProviderConfig } from "./provider-config-owner.js";
 import type { ProviderCatalogContext, ProviderCatalogResult } from "./types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -75,12 +76,9 @@ export async function buildSingleProviderApiKeyCatalog(params: {
     return null;
   }
 
-  const explicitProvider =
-    params.allowExplicitBaseUrl && params.ctx.config.models?.providers
-      ? Object.entries(params.ctx.config.models.providers).find(
-          ([configuredProviderId]) => normalizeProviderId(configuredProviderId) === providerId,
-        )?.[1]
-      : undefined;
+  const explicitProvider = params.allowExplicitBaseUrl
+    ? resolveConfiguredProviderConfig({ provider: providerId, config: params.ctx.config })
+    : undefined;
   const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl) ?? "";
 
   return {
