@@ -417,6 +417,71 @@ describe("Codex plugin thread config", () => {
     ]);
   });
 
+  it("fails closed when synthetic plugin list marketplaces are unreadable", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("fuzz-app", true)],
+        nextCursor: null,
+      }),
+    });
+
+    const unreadableList = {
+      get marketplaces() {
+        throw new Error("fuzzplugin marketplaces read failed");
+      },
+    };
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            fuzzplugin: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "fuzzplugin",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return unreadableList;
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.diagnostics).toStrictEqual([
+      {
+        code: "plugin_list_unavailable",
+        plugin: {
+          configKey: "fuzzplugin",
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: "fuzzplugin",
+          enabled: true,
+          allowDestructiveActions: true,
+        },
+        message: "Codex plugin list unavailable: plugin marketplaces is unreadable",
+      },
+    ]);
+  });
+
   it("force-refreshes app inventory when proven plugin apps are not ready", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({

@@ -22,6 +22,7 @@ export type CodexPluginMarketplaceRef = {
 
 export type CodexPluginInventoryDiagnosticCode =
   | "disabled"
+  | "plugin_list_unavailable"
   | "marketplace_missing"
   | "plugin_missing"
   | "plugin_disabled"
@@ -92,9 +93,29 @@ export async function readCodexPluginInventory(
   }
 
   const appInventory = readCachedAppInventory(params);
-  const listed = (await params.request("plugin/list", {
-    cwds: [],
-  } satisfies v2.PluginListParams)) as v2.PluginListResponse;
+  let listed: v2.PluginListResponse;
+  try {
+    listed = normalizePluginListResponse(
+      await params.request("plugin/list", {
+        cwds: [],
+      } satisfies v2.PluginListParams),
+    );
+  } catch (error) {
+    return {
+      policy,
+      records: [],
+      diagnostics: policy.pluginPolicies
+        .filter((pluginPolicy) => pluginPolicy.enabled)
+        .map((pluginPolicy) => ({
+          code: "plugin_list_unavailable",
+          plugin: pluginPolicy,
+          message: `Codex plugin list unavailable: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        })),
+      ...(appInventory ? { appInventory } : {}),
+    };
+  }
   const marketplaceEntry = listed.marketplaces.find(
     (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
   );
@@ -219,6 +240,33 @@ export function pluginReadParams(
       ? { remoteMarketplaceName: marketplace.remoteMarketplaceName }
       : {}),
     pluginName,
+  };
+}
+
+function normalizePluginListResponse(value: unknown): v2.PluginListResponse {
+  const record = requireRecord(value, "plugin list");
+  const marketplaces = readArrayProperty(record, "marketplaces", "plugin marketplaces")
+    .map(normalizeMarketplaceEntry)
+    .filter((marketplace): marketplace is v2.PluginMarketplaceEntry => marketplace !== undefined);
+  return { marketplaces };
+}
+
+function normalizeMarketplaceEntry(value: unknown): v2.PluginMarketplaceEntry | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const name = readOptionalStringProperty(record, "name");
+  if (!name) {
+    return undefined;
+  }
+  const path = readOptionalStringProperty(record, "path");
+  return {
+    name,
+    ...(path ? { path } : {}),
+    plugins: readArrayProperty(record, "plugins", `plugin marketplace ${name} plugins`).flatMap(
+      (plugin) => normalizePluginSummary(plugin) ?? [],
+    ),
   };
 }
 
