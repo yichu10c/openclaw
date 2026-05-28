@@ -47,6 +47,139 @@ describe("runMessageAction send validation", () => {
     ).rejects.toThrow(/message required/i);
   });
 
+  it("treats unreadable synthetic action params as absent before validation", async () => {
+    const actionParams = {
+      channel: "workspace",
+      target: "#C12345678",
+      get message() {
+        throw new Error("fuzzplugin message getter failed");
+      },
+    } as Record<string, unknown>;
+
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams,
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow(/message required/i);
+  });
+
+  it("fails closed when synthetic routing params are unreadable", async () => {
+    const actionParams = {
+      channel: "workspace",
+      get target() {
+        throw new Error("fuzzplugin target getter failed");
+      },
+      message: "hello from fuzzplugin",
+    } as Record<string, unknown>;
+
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams,
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow("target could not be read");
+  });
+
+  it("fails closed when synthetic channelId params are unreadable", async () => {
+    const actionParams = {
+      channel: "workspace",
+      get channelId() {
+        throw new Error("fuzzplugin channel id getter failed");
+      },
+      message: "hello from fuzzplugin",
+    } as Record<string, unknown>;
+
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams,
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow("channelId could not be read");
+  });
+
+  it.each([
+    "idempotencyKey",
+    "idempotency_key",
+    "messageId",
+    "message_id",
+    "topLevel",
+    "top_level",
+    "chatGuid",
+    "chat_guid",
+    "chatIdentifier",
+    "chat_identifier",
+  ])("fails closed when synthetic routing/control param %s is unreadable", async (alias) => {
+    const actionParams = {
+      channel: "workspace",
+      target: "#C12345678",
+      message: "hello from fuzzplugin",
+    } as Record<string, unknown>;
+    Object.defineProperty(actionParams, alias, {
+      enumerable: true,
+      get() {
+        throw new Error(`fuzzplugin ${alias} getter failed`);
+      },
+    });
+
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams,
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow(`${alias} could not be read`);
+  });
+
+  it("fails closed when synthetic action param keys are unreadable", async () => {
+    const actionParams = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("fuzzplugin action param keys failed");
+        },
+      },
+    ) as Record<string, unknown>;
+
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams,
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow("message action params could not be read");
+  });
+
+  it("does not inherit synthetic route params from __proto__", async () => {
+    const actionParams = JSON.parse(
+      '{"__proto__":{"target":"#C12345678"},"channel":"workspace","message":"hello"}',
+    ) as Record<string, unknown>;
+
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams,
+      }),
+    ).rejects.toThrow(/requires a target/i);
+  });
+
+  it("rejects oversized synthetic action param bags instead of truncating them", async () => {
+    const actionParams = Object.fromEntries(
+      Array.from({ length: 10_001 }, (_entry, index) => [`mockParam${index}`, "x"]),
+    );
+
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams,
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow("message action params supports at most 10000 entries");
+  });
+
   it("allows send when only presentation payloads are provided", async () => {
     const result = await runDrySend({
       cfg: {

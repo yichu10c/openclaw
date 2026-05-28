@@ -5,6 +5,7 @@ import {
   readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
+  ToolInputError,
 } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
@@ -102,9 +103,85 @@ let messageActionGatewayRuntimePromise: Promise<
   typeof import("./message.gateway.runtime.js")
 > | null = null;
 
+const MAX_MESSAGE_ACTION_PARAM_ENTRIES = 10_000;
+const MESSAGE_ACTION_FAIL_CLOSED_PARAM_KEYS = new Set([
+  "accountId",
+  "account_id",
+  "action",
+  "asDocument",
+  "as_document",
+  "channel",
+  "channelId",
+  "channel_id",
+  "chatGuid",
+  "chatIdentifier",
+  "chatId",
+  "chat_guid",
+  "chat_identifier",
+  "chat_id",
+  "conversationId",
+  "conversation_id",
+  "dryRun",
+  "dry_run",
+  "filePath",
+  "fileUrl",
+  "file_path",
+  "file_url",
+  "forceDocument",
+  "force_document",
+  "idempotencyKey",
+  "idempotency_key",
+  "media",
+  "mediaUrl",
+  "media_url",
+  "messageId",
+  "message_id",
+  "path",
+  "replyTo",
+  "reply_to",
+  "sessionId",
+  "sessionKey",
+  "session_id",
+  "session_key",
+  "target",
+  "threadId",
+  "thread_id",
+  "to",
+  "topLevel",
+  "top_level",
+  "userId",
+  "user_id",
+]);
+
 function loadMessageActionGatewayRuntime() {
   messageActionGatewayRuntimePromise ??= import("./message.gateway.runtime.js");
   return messageActionGatewayRuntimePromise;
+}
+
+function copyMessageActionParams(params: Record<string, unknown>): Record<string, unknown> {
+  let keys: string[];
+  try {
+    keys = Object.keys(params);
+  } catch {
+    throw new ToolInputError("message action params could not be read");
+  }
+  if (keys.length > MAX_MESSAGE_ACTION_PARAM_ENTRIES) {
+    throw new ToolInputError(
+      `message action params supports at most ${MAX_MESSAGE_ACTION_PARAM_ENTRIES} entries`,
+    );
+  }
+  const copy = Object.create(null) as Record<string, unknown>;
+  for (const key of keys) {
+    try {
+      copy[key] = params[key];
+    } catch {
+      if (MESSAGE_ACTION_FAIL_CLOSED_PARAM_KEYS.has(key)) {
+        throw new ToolInputError(`${key} could not be read`);
+      }
+      // Unreadable model/plugin-provided action params are treated as absent.
+    }
+  }
+  return copy;
 }
 
 export type RunMessageActionParams = {
@@ -1293,7 +1370,7 @@ export async function runMessageAction(
   input: RunMessageActionParams,
 ): Promise<MessageActionRunResult> {
   const cfg = input.cfg;
-  let params = { ...input.params };
+  let params = copyMessageActionParams(input.params);
   const resolvedAgentId =
     input.agentId ??
     (input.sessionKey
