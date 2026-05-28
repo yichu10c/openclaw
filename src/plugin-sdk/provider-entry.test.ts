@@ -361,6 +361,39 @@ describe("defineSingleProviderPluginEntry", () => {
     expect(provider?.auth.map((method) => method.id)).toEqual(["api-key", "mock"]);
   });
 
+  it("skips unreadable optional provider metadata during registration", async () => {
+    const provider = {
+      label: "Fuzz",
+      docsPath: "/providers/fuzzplugin",
+      catalog: {
+        buildProvider: () => ({
+          api: "openai-completions" as const,
+          baseUrl: "https://fuzzplugin.test/v1",
+          models: [],
+        }),
+      },
+      get capabilities() {
+        throw new Error("fuzzplugin provider capabilities read failed");
+      },
+      get hookAliases() {
+        throw new Error("mockplugin provider hook aliases read failed");
+      },
+    };
+    const entry = defineSingleProviderPluginEntry({
+      id: "fuzzplugin",
+      name: "Fuzz Provider",
+      description: "Synthetic provider plugin",
+      provider,
+    });
+
+    const { provider: registeredProvider } = await captureProviderEntry({ entry });
+
+    expect(registeredProvider?.id).toBe("fuzzplugin");
+    expect(registeredProvider?.label).toBe("Fuzz");
+    expect(registeredProvider).not.toHaveProperty("capabilities");
+    expect(registeredProvider).not.toHaveProperty("hookAliases");
+  });
+
   it("registers extra non-api-key auth methods", async () => {
     const entry = defineSingleProviderPluginEntry({
       id: "demo",
