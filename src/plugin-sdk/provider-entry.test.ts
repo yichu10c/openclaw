@@ -303,6 +303,64 @@ describe("defineSingleProviderPluginEntry", () => {
     ]);
   });
 
+  it("registers provider auth entries without using source array methods", async () => {
+    const auth = Object.assign(
+      [
+        {
+          methodId: "api-key",
+          label: "Fuzz API key",
+          hint: "Synthetic key",
+          optionKey: "fuzzApiKey",
+          flagName: "--fuzz-api-key" as const,
+          envVar: "FUZZ_API_KEY",
+          promptMessage: "Enter Fuzz API key",
+        },
+      ],
+      {
+        map() {
+          throw new Error("fuzzplugin provider auth map failed");
+        },
+      },
+    );
+    const extraAuth = Object.assign(
+      [
+        {
+          id: "mock",
+          label: "Mock Auth",
+          kind: "oauth" as const,
+          run: async () => ({ profiles: [] }),
+        },
+      ],
+      {
+        [Symbol.iterator]() {
+          throw new Error("mockplugin extra auth iterator failed");
+        },
+      },
+    );
+    const entry = defineSingleProviderPluginEntry({
+      id: "fuzzplugin",
+      name: "Fuzz Provider",
+      description: "Synthetic provider plugin",
+      provider: {
+        label: "Fuzz",
+        docsPath: "/providers/fuzzplugin",
+        auth,
+        extraAuth,
+        catalog: {
+          buildProvider: () => ({
+            api: "openai-completions",
+            baseUrl: "https://fuzzplugin.test/v1",
+            models: [],
+          }),
+        },
+      },
+    });
+
+    const { provider } = await captureProviderEntry({ entry });
+    expect(provider?.envVars).toEqual(["FUZZ_API_KEY"]);
+    expect(provider?.auth.map((method) => method.id)).toEqual(["api-key", "mock"]);
+  });
+
   it("registers extra non-api-key auth methods", async () => {
     const entry = defineSingleProviderPluginEntry({
       id: "demo",

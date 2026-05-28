@@ -99,13 +99,54 @@ function resolveWizardSetup(params: {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readRecordValue(record: Record<string, unknown>, key: string): unknown {
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function copyArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      return [];
+    }
+  }
+  return entries;
+}
+
+function copyProviderAuthOptions(value: unknown): SingleProviderPluginApiKeyAuthOptions[] {
+  return copyArrayEntries(value).filter(isRecord) as SingleProviderPluginApiKeyAuthOptions[];
+}
+
+function copyProviderAuthMethods(value: unknown): ProviderAuthMethod[] {
+  return copyArrayEntries(value).filter(isRecord) as ProviderAuthMethod[];
+}
+
 function resolveEnvVars(params: {
-  envVars?: string[];
+  envVars?: unknown;
   auth?: SingleProviderPluginApiKeyAuthOptions[];
 }): string[] | undefined {
   const combined = normalizeStringEntries([
-    ...(params.envVars ?? []),
-    ...(params.auth ?? []).map((entry) => entry.envVar).filter(Boolean),
+    ...copyArrayEntries(params.envVars),
+    ...(params.auth ?? []).map((entry) => readRecordValue(entry, "envVar")).filter(Boolean),
   ]);
   return combined.length > 0 ? uniqueStrings(combined) : undefined;
 }
@@ -135,11 +176,12 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
       const provider = options.provider;
       if (provider) {
         const providerId = provider.id ?? options.id;
+        const providerAuth = copyProviderAuthOptions(provider.auth);
         const envVars = resolveEnvVars({
           envVars: provider.envVars,
-          auth: provider.auth,
+          auth: providerAuth,
         });
-        const auth = (provider.auth ?? []).map((entry) => {
+        const auth = providerAuth.map((entry) => {
           const { wizard: _wizard, ...authParams } = entry;
           const wizard = resolveWizardSetup({
             providerId,
@@ -153,7 +195,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
             ...(wizard ? { wizard } : {}),
           });
         });
-        auth.push(...(provider.extraAuth ?? []));
+        auth.push(...copyProviderAuthMethods(provider.extraAuth));
         let catalog: ProviderPluginCatalog;
         if ("run" in provider.catalog) {
           const catalogRun = provider.catalog.run;
