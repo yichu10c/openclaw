@@ -36,11 +36,43 @@ type ChannelPresenceSignal = {
   source: ChannelPresenceSignalSource;
 };
 
+function copyRecordEntries(value: unknown): Array<[string, unknown]> {
+  if (!isRecord(value)) {
+    return [];
+  }
+  let keys: string[] = [];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return [];
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, value[key]]);
+    } catch {
+      // Skip unreadable channel config entries; other config/env signals can still apply.
+    }
+  }
+  return entries;
+}
+
+function readRecordValue(value: unknown, key: string): unknown {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  try {
+    return value[key];
+  } catch {
+    return undefined;
+  }
+}
+
 export function hasMeaningfulChannelConfig(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
-  return Object.keys(value).some((key) => key !== "enabled");
+  return copyRecordEntries(value).some(([key]) => key !== "enabled");
 }
 
 export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): string[] {
@@ -48,8 +80,8 @@ export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): 
   if (!channels) {
     return [];
   }
-  return Object.entries(channels)
-    .filter(([, value]) => isRecord(value) && value.enabled === false)
+  return copyRecordEntries(channels)
+    .filter(([, value]) => readRecordValue(value, "enabled") === false)
     .map(([channelId]) => normalizeOptionalLowercaseString(channelId))
     .filter((channelId): channelId is string => Boolean(channelId));
 }
@@ -134,7 +166,7 @@ export function listPotentialConfiguredChannelPresenceSignals(
   const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (channels) {
-    for (const [key, value] of Object.entries(channels)) {
+    for (const [key, value] of copyRecordEntries(channels)) {
       if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
         continue;
       }
@@ -199,7 +231,7 @@ export function hasPotentialConfiguredChannels(
 ): boolean {
   const channels = isRecord(cfg?.channels) ? cfg.channels : null;
   if (channels) {
-    for (const [key, value] of Object.entries(channels)) {
+    for (const [key, value] of copyRecordEntries(channels)) {
       if (IGNORED_CHANNEL_CONFIG_KEYS.has(key)) {
         continue;
       }

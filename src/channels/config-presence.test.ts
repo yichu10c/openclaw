@@ -87,6 +87,71 @@ describe("config presence", () => {
     expect(listExplicitlyDisabledChannelIdsForConfig(cfg)).toEqual(["matrix"]);
   });
 
+  it("ignores unreadable synthetic channel maps while preserving env signals", () => {
+    const cfg = {
+      channels: new Proxy(
+        {},
+        {
+          ownKeys() {
+            throw new Error("fuzzplugin channel config keys failed");
+          },
+        },
+      ),
+    } as unknown as OpenClawConfig;
+    const env = {
+      MATRIX_ACCESS_TOKEN: "token",
+    } as NodeJS.ProcessEnv;
+
+    expect(listExplicitlyDisabledChannelIdsForConfig(cfg)).toStrictEqual([]);
+    expect(
+      listPotentialConfiguredChannelPresenceSignals(cfg, env, {
+        channelIds: ["matrix"],
+        includePersistedAuthState: false,
+      }),
+    ).toEqual([{ channelId: "matrix", source: "env" }]);
+    expect(
+      hasPotentialConfiguredChannels(
+        cfg,
+        {},
+        { channelIds: ["matrix"], includePersistedAuthState: false },
+      ),
+    ).toBe(false);
+  });
+
+  it("skips unreadable synthetic channel entries while preserving later config signals", () => {
+    const channels: Record<string, unknown> = {
+      fuzzplugin: {},
+      mockplugin: { token: "configured" },
+    };
+    Object.defineProperty(channels, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin channel config entry failed");
+      },
+    });
+    const cfg = { channels } as unknown as OpenClawConfig;
+
+    expect(
+      listPotentialConfiguredChannelIds(cfg, {}, { includePersistedAuthState: false }),
+    ).toEqual(["mockplugin"]);
+    expect(hasPotentialConfiguredChannels(cfg, {}, { includePersistedAuthState: false })).toBe(
+      true,
+    );
+  });
+
+  it("treats unreadable synthetic channel values as not meaningfully configured", () => {
+    const value = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("mockplugin channel value keys failed");
+        },
+      },
+    );
+
+    expect(hasMeaningfulChannelConfig(value)).toBe(false);
+  });
+
   it("detects env-only channel config", () => {
     const env = {
       MATRIX_ACCESS_TOKEN: "token",
