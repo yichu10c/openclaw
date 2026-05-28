@@ -252,7 +252,7 @@ async function readPluginDetail(
       "plugin/read",
       pluginReadParams(marketplace, pluginPolicy.pluginName),
     )) as v2.PluginReadResponse;
-    return response.plugin;
+    return normalizePluginDetail(readRequiredProperty(response, "plugin", "plugin"));
   } catch (error) {
     diagnostics.push({
       code: "plugin_detail_unavailable",
@@ -261,6 +261,136 @@ async function readPluginDetail(
         error instanceof Error ? error.message : String(error)
       }`,
     });
+    return undefined;
+  }
+}
+
+function normalizePluginDetail(value: unknown): v2.PluginDetail {
+  const record = requireRecord(value, "plugin");
+  const summary =
+    normalizePluginSummary(readRequiredProperty(record, "summary", "plugin.summary")) ??
+    pluginSummaryFallback();
+  const apps = readArrayProperty(record, "apps", "plugin.apps").flatMap(normalizeAppSummary);
+  const mcpServers = readArrayProperty(record, "mcpServers", "plugin.mcpServers").flatMap((entry) =>
+    typeof entry === "string" && entry.trim() ? [entry] : [],
+  );
+  const marketplaceName = readOptionalStringProperty(record, "marketplaceName");
+  const marketplacePath = readOptionalStringProperty(record, "marketplacePath");
+  const description = readOptionalStringProperty(record, "description");
+  return {
+    ...(marketplaceName ? { marketplaceName } : {}),
+    ...(marketplacePath ? { marketplacePath } : {}),
+    summary,
+    ...(description ? { description } : {}),
+    skills: [],
+    apps,
+    mcpServers,
+  };
+}
+
+function normalizePluginSummary(value: unknown): v2.PluginSummary | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const id = readOptionalStringProperty(record, "id");
+  const name = readOptionalStringProperty(record, "name");
+  if (!id || !name) {
+    return undefined;
+  }
+  return {
+    id,
+    name,
+    source: {},
+    installed: readOptionalBooleanProperty(record, "installed") ?? false,
+    enabled: readOptionalBooleanProperty(record, "enabled") ?? false,
+    interface: null,
+  };
+}
+
+function pluginSummaryFallback(): v2.PluginSummary {
+  return {
+    id: "",
+    name: "",
+    source: {},
+    installed: false,
+    enabled: false,
+    interface: null,
+  };
+}
+
+function normalizeAppSummary(value: unknown): v2.AppSummary[] {
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+  const id = readOptionalStringProperty(record, "id");
+  if (!id) {
+    return [];
+  }
+  const name = readOptionalStringProperty(record, "name") ?? id;
+  return [
+    {
+      id,
+      name,
+      description: readOptionalStringProperty(record, "description") ?? null,
+      installUrl: readOptionalStringProperty(record, "installUrl") ?? null,
+      needsAuth: readOptionalBooleanProperty(record, "needsAuth") ?? false,
+    },
+  ];
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  const record = asRecord(value);
+  if (!record) {
+    throw new Error(`${label} is not an object`);
+  }
+  return record;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readRequiredProperty(
+  record: Record<string, unknown>,
+  key: string,
+  label: string,
+): unknown {
+  try {
+    return record[key];
+  } catch {
+    throw new Error(`${label} is unreadable`);
+  }
+}
+
+function readArrayProperty(record: Record<string, unknown>, key: string, label: string): unknown[] {
+  const value = readRequiredProperty(record, key, label);
+  return Array.isArray(value) ? value : [];
+}
+
+function readOptionalStringProperty(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  try {
+    const value = record[key];
+    return typeof value === "string" && value.trim() ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readOptionalBooleanProperty(
+  record: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
+  try {
+    const value = record[key];
+    return typeof value === "boolean" ? value : undefined;
+  } catch {
     return undefined;
   }
 }
