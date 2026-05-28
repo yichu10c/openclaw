@@ -1613,6 +1613,87 @@ describe("buildCodexMigrationProvider", () => {
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toBeUndefined();
   });
 
+  it("leaves selected Codex plugins as warnings when target plugin state is unreadable", async () => {
+    const fixture = await createCodexFixture();
+    const configState: MigrationProviderContext["config"] = {
+      agents: { defaults: { workspace: fixture.workspaceDir } },
+    } as MigrationProviderContext["config"];
+    appServerRequest.mockImplementation(
+      async ({ method, agentDir }: { method: string; agentDir?: string }) => {
+        const isTarget = typeof agentDir === "string";
+        if (method === "plugin/list" && !isTarget) {
+          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read" && !isTarget) {
+          return pluginRead("google-calendar");
+        }
+        if (method === "plugin/list" && isTarget) {
+          return {
+            marketplaces: [
+              {
+                name: CODEX_PLUGINS_MARKETPLACE_NAME,
+                path: "/marketplaces/openai-curated",
+                interface: null,
+                plugins: [
+                  {
+                    id: "google-calendar",
+                    name: "google-calendar",
+                    get installed() {
+                      throw new Error("fuzzplugin installed read failed");
+                    },
+                    enabled: true,
+                  },
+                ],
+              },
+            ],
+            marketplaceLoadErrors: [],
+            featuredPluginIds: [],
+          };
+        }
+        if (method === "skills/list") {
+          return { data: [] } satisfies v2.SkillsListResponse;
+        }
+        if (method === "hooks/list") {
+          return { data: [] } satisfies v2.HooksListResponse;
+        }
+        if (method === "config/mcpServer/reload") {
+          return {};
+        }
+        if (method === "app/list") {
+          return appsList([]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    );
+    const provider = buildCodexMigrationProvider({
+      runtime: createConfigRuntime(configState),
+    });
+
+    const result = await provider.apply(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+        config: configState,
+      }),
+    );
+
+    expect(
+      appServerRequest.mock.calls.some(
+        ([arg]) => (arg as { method?: string }).method === "plugin/install",
+      ),
+    ).toBe(false);
+    expectRecordFields(findItem(result.items, "plugin:google-calendar"), {
+      kind: "plugin",
+      action: "install",
+      status: "warning",
+      reason: "plugin_list_unavailable",
+      message: 'Codex plugin "google-calendar" could not be migrated automatically',
+    });
+    expect(result.summary.errors).toBe(0);
+    expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toBeUndefined();
+  });
+
   it("leaves selected Codex plugins as warnings when target inventory times out", async () => {
     const fixture = await createCodexFixture();
     const configState: MigrationProviderContext["config"] = {
@@ -1662,7 +1743,7 @@ describe("buildCodexMigrationProvider", () => {
       kind: "plugin",
       action: "install",
       status: "warning",
-      reason: "plugin_inventory_unavailable",
+      reason: "plugin_list_unavailable",
       message: 'Codex plugin "google-calendar" could not be migrated automatically',
     });
     expect(result.warnings).toContain(

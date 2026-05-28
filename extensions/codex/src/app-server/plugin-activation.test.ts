@@ -43,6 +43,75 @@ describe("Codex plugin activation", () => {
     expect(calls).toEqual(["plugin/list"]);
   });
 
+  it("fails closed when activation plugin list marketplaces are unreadable", async () => {
+    const result = await ensureCodexPluginActivation({
+      identity: identity("fuzzplugin"),
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return {
+            get marketplaces() {
+              throw new Error("fuzzplugin marketplaces read failed");
+            },
+          };
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expectActivationResult(result, {
+      ok: false,
+      reason: "plugin_list_unavailable",
+      installAttempted: false,
+    });
+    expect(result.diagnostics).toEqual([
+      {
+        message: "Codex plugin list unavailable: plugin marketplaces is unreadable",
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      name: "unreadable installed state",
+      plugin: {
+        id: "fuzzplugin",
+        name: "fuzzplugin",
+        get installed() {
+          throw new Error("fuzzplugin installed read failed");
+        },
+        enabled: true,
+      },
+      message: "Codex plugin list unavailable: plugin.installed is unreadable",
+    },
+    {
+      name: "non-boolean enabled state",
+      plugin: {
+        id: "fuzzplugin",
+        name: "fuzzplugin",
+        installed: true,
+        enabled: "yes",
+      },
+      message: "Codex plugin list unavailable: plugin.enabled must be boolean",
+    },
+  ])("fails closed when activation plugin state has $name", async ({ plugin, message }) => {
+    const result = await ensureCodexPluginActivation({
+      identity: identity("fuzzplugin"),
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([plugin as unknown as v2.PluginSummary]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expectActivationResult(result, {
+      ok: false,
+      reason: "plugin_list_unavailable",
+      installAttempted: false,
+    });
+    expect(result.diagnostics).toEqual([{ message }]);
+  });
+
   it("can reinstall an already active plugin when migration explicitly applies it", async () => {
     const calls: string[] = [];
     const result = await ensureCodexPluginActivation({

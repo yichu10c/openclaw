@@ -7,6 +7,7 @@ import {
 import { CODEX_PLUGINS_MARKETPLACE_NAME, type ResolvedCodexPluginPolicy } from "./config.js";
 import {
   findOpenAiCuratedPluginSummary,
+  normalizePluginListResponse,
   pluginReadParams,
   type CodexPluginMarketplaceRef,
   type CodexPluginRuntimeRequest,
@@ -17,6 +18,7 @@ export type CodexPluginActivationReason =
   | "already_active"
   | "installed"
   | "disabled"
+  | "plugin_list_unavailable"
   | "marketplace_missing"
   | "plugin_missing"
   | "auth_required"
@@ -57,9 +59,21 @@ export async function ensureCodexPluginActivation(
     });
   }
 
-  const listed = (await params.request("plugin/list", {
-    cwds: [],
-  } satisfies v2.PluginListParams)) as v2.PluginListResponse;
+  let listed: v2.PluginListResponse;
+  try {
+    listed = normalizePluginListResponse(
+      await params.request("plugin/list", {
+        cwds: [],
+      } satisfies v2.PluginListParams),
+      { requirePluginState: true },
+    );
+  } catch (error) {
+    return activationFailure(params.identity, "plugin_list_unavailable", {
+      message: `Codex plugin list unavailable: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+  }
   const resolved = findOpenAiCuratedPluginSummary(listed, params.identity.pluginName);
   if (!resolved) {
     const hasCuratedMarketplace = listed.marketplaces.some(

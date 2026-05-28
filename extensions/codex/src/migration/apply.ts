@@ -246,7 +246,11 @@ async function applyCodexPluginInstallItem(
         },
       };
     }
-    if (result.reason === "plugin_missing" || result.reason === "marketplace_missing") {
+    if (
+      result.reason === "plugin_missing" ||
+      result.reason === "marketplace_missing" ||
+      result.reason === "plugin_list_unavailable"
+    ) {
       return {
         ...item,
         status: "warning",
@@ -519,6 +523,7 @@ function codexPluginActivationReportState(result: CodexPluginActivationResult): 
     case "auth_required":
       return { installed: true, enabled: false };
     case "disabled":
+    case "plugin_list_unavailable":
     case "marketplace_missing":
     case "plugin_missing":
       return { installed: false, enabled: false };

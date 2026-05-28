@@ -75,6 +75,10 @@ export type ReadCodexPluginInventoryParams = {
   suppressAppInventoryRefresh?: boolean;
 };
 
+type NormalizePluginListOptions = {
+  requirePluginState?: boolean;
+};
+
 export async function readCodexPluginInventory(
   params: ReadCodexPluginInventoryParams,
 ): Promise<CodexPluginInventory> {
@@ -243,15 +247,21 @@ export function pluginReadParams(
   };
 }
 
-function normalizePluginListResponse(value: unknown): v2.PluginListResponse {
+export function normalizePluginListResponse(
+  value: unknown,
+  options: NormalizePluginListOptions = {},
+): v2.PluginListResponse {
   const record = requireRecord(value, "plugin list");
   const marketplaces = readArrayProperty(record, "marketplaces", "plugin marketplaces")
-    .map(normalizeMarketplaceEntry)
+    .map((entry) => normalizeMarketplaceEntry(entry, options))
     .filter((marketplace): marketplace is v2.PluginMarketplaceEntry => marketplace !== undefined);
   return { marketplaces };
 }
 
-function normalizeMarketplaceEntry(value: unknown): v2.PluginMarketplaceEntry | undefined {
+function normalizeMarketplaceEntry(
+  value: unknown,
+  options: NormalizePluginListOptions,
+): v2.PluginMarketplaceEntry | undefined {
   const record = asRecord(value);
   if (!record) {
     return undefined;
@@ -265,7 +275,7 @@ function normalizeMarketplaceEntry(value: unknown): v2.PluginMarketplaceEntry | 
     name,
     ...(path ? { path } : {}),
     plugins: readArrayProperty(record, "plugins", `plugin marketplace ${name} plugins`).flatMap(
-      (plugin) => normalizePluginSummary(plugin) ?? [],
+      (plugin) => normalizePluginSummary(plugin, options) ?? [],
     ),
   };
 }
@@ -336,7 +346,10 @@ function normalizePluginDetail(value: unknown): v2.PluginDetail {
   };
 }
 
-function normalizePluginSummary(value: unknown): v2.PluginSummary | undefined {
+function normalizePluginSummary(
+  value: unknown,
+  options: NormalizePluginListOptions = {},
+): v2.PluginSummary | undefined {
   const record = asRecord(value);
   if (!record) {
     return undefined;
@@ -350,8 +363,12 @@ function normalizePluginSummary(value: unknown): v2.PluginSummary | undefined {
     id,
     name,
     source: {},
-    installed: readOptionalBooleanProperty(record, "installed") ?? false,
-    enabled: readOptionalBooleanProperty(record, "enabled") ?? false,
+    installed: options.requirePluginState
+      ? readBooleanProperty(record, "installed", "plugin.installed")
+      : (readOptionalBooleanProperty(record, "installed") ?? false),
+    enabled: options.requirePluginState
+      ? readBooleanProperty(record, "enabled", "plugin.enabled")
+      : (readOptionalBooleanProperty(record, "enabled") ?? false),
     interface: null,
   };
 }
@@ -441,6 +458,14 @@ function readOptionalBooleanProperty(
   } catch {
     return undefined;
   }
+}
+
+function readBooleanProperty(record: Record<string, unknown>, key: string, label: string): boolean {
+  const value = readRequiredProperty(record, key, label);
+  if (typeof value !== "boolean") {
+    throw new Error(`${label} must be boolean`);
+  }
+  return value;
 }
 
 function resolveAppOwnership(params: {
