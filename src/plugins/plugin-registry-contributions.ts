@@ -104,17 +104,64 @@ function normalizeContributionId(value: string): string {
   return value.trim();
 }
 
-function collectObjectKeys(value: Record<string, unknown> | undefined): readonly string[] {
-  return value ? Object.keys(value) : [];
+const MAX_REGISTRY_CONTRIBUTION_LIST_ENTRIES = 10_000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function collectObjectKeys(value: unknown): readonly string[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  try {
+    return Object.keys(value);
+  } catch {
+    return [];
+  }
+}
+
+function copyArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const safeLength = Math.min(Math.max(0, length), MAX_REGISTRY_CONTRIBUTION_LIST_ENTRIES);
+  const entries: unknown[] = [];
+  for (let index = 0; index < safeLength; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      entries.push(undefined);
+    }
+  }
+  return entries;
+}
+
+function copyStringEntries(value: unknown): string[] {
+  return copyArrayEntries(value).flatMap((entry) => (typeof entry === "string" ? [entry] : []));
 }
 
 function collectContractKeys(plugin: PluginManifestRecord): readonly string[] {
-  const contracts = plugin.contracts;
-  if (!contracts) {
-    return [];
-  }
-  return Object.entries(contracts).flatMap(([key, value]) =>
-    Array.isArray(value) && value.length > 0 ? [key] : [],
+  const contracts = readRecordValue(plugin, "contracts");
+  return collectObjectKeys(contracts).flatMap((key) =>
+    copyArrayEntries(readRecordValue(contracts, key)).length > 0 ? [key] : [],
   );
 }
 
@@ -122,7 +169,14 @@ function listManifestContractValues(
   plugin: PluginManifestRecord,
   contract: PluginManifestContractListKey,
 ): readonly string[] {
-  return plugin.contracts?.[contract] ?? [];
+  return copyStringEntries(readRecordValue(readRecordValue(plugin, "contracts"), contract));
+}
+
+function listSetupProviderIds(setup: unknown): string[] {
+  return copyArrayEntries(readRecordValue(setup, "providers")).flatMap((provider) => {
+    const id = readRecordValue(provider, "id");
+    return typeof id === "string" ? [id] : [];
+  });
 }
 
 function loadManifestContractRegistry(
@@ -143,22 +197,30 @@ function listManifestContributionIds(
 ): readonly string[] {
   switch (contribution) {
     case "providers":
-      return plugin.providers;
+      return copyStringEntries(readRecordValue(plugin, "providers"));
     case "channels":
-      return plugin.channels;
+      return copyStringEntries(readRecordValue(plugin, "channels"));
     case "channelConfigs":
-      return collectObjectKeys(plugin.channelConfigs);
+      return collectObjectKeys(readRecordValue(plugin, "channelConfigs"));
     case "setupProviders":
-      return plugin.setup?.providers?.map((provider) => provider.id) ?? [];
+      return listSetupProviderIds(readRecordValue(plugin, "setup"));
     case "cliBackends":
-      return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])];
-    case "modelCatalogProviders":
       return [
-        ...collectObjectKeys(plugin.modelCatalog?.providers),
-        ...collectObjectKeys(plugin.modelCatalog?.aliases),
+        ...copyStringEntries(readRecordValue(plugin, "cliBackends")),
+        ...copyStringEntries(readRecordValue(readRecordValue(plugin, "setup"), "cliBackends")),
       ];
+    case "modelCatalogProviders": {
+      const modelCatalog = readRecordValue(plugin, "modelCatalog");
+      return [
+        ...collectObjectKeys(readRecordValue(modelCatalog, "providers")),
+        ...collectObjectKeys(readRecordValue(modelCatalog, "aliases")),
+      ];
+    }
     case "commandAliases":
-      return plugin.commandAliases?.map((alias) => alias.name) ?? [];
+      return copyArrayEntries(readRecordValue(plugin, "commandAliases")).flatMap((alias) => {
+        const name = readRecordValue(alias, "name");
+        return typeof name === "string" ? [name] : [];
+      });
     case "contracts":
       return collectContractKeys(plugin);
   }
@@ -474,7 +536,9 @@ export function resolveManifestContractPluginIdsByCompatibilityRuntimePath(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
         listManifestContractValues(plugin, params.contract).length > 0 &&
-        (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(normalizedPath),
+        copyStringEntries(
+          readRecordValue(readRecordValue(plugin, "configContracts"), "compatibilityRuntimePaths"),
+        ).includes(normalizedPath),
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));

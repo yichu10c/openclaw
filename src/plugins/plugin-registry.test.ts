@@ -34,6 +34,7 @@ import {
   resolvePluginContributionOwners,
   resolveProviderOwners,
   resolveSetupProviderOwners,
+  type PluginLookUpTable,
 } from "./plugin-registry.js";
 import { resolvePluginPath } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -370,6 +371,81 @@ describe("plugin registry facade", () => {
         matches: "tools",
       }),
     ).toEqual(["demo"]);
+  });
+
+  it("skips unreadable synthetic manifest contribution fields in lookup tables", () => {
+    const mockManifest = {
+      id: "mockplugin",
+      origin: "global",
+      providers: ["mock-provider"],
+      channels: [],
+      cliBackends: [],
+      contracts: {
+        tools: ["mock-tool"],
+      },
+    };
+    const fuzzManifest = {
+      id: "fuzzplugin",
+      origin: "global",
+      channels: [],
+      cliBackends: [],
+    };
+    Object.defineProperty(fuzzManifest, "providers", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin providers are unreadable");
+      },
+    });
+    Object.defineProperty(fuzzManifest, "contracts", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin contracts are unreadable");
+      },
+    });
+    const index = createIndex("mockplugin", {
+      plugins: [
+        ...createIndex("mockplugin").plugins,
+        {
+          ...createIndex("fuzzplugin").plugins[0],
+          pluginId: "fuzzplugin",
+          enabled: true,
+        },
+      ],
+    });
+    const empty = new Map<string, readonly string[]>();
+    const lookUpTable = {
+      index,
+      manifestRegistry: {
+        plugins: [mockManifest, fuzzManifest],
+        diagnostics: [],
+      },
+      plugins: [mockManifest, fuzzManifest],
+      normalizePluginId: (id: string) => id,
+      owners: {
+        channels: empty,
+        channelConfigs: empty,
+        providers: new Map([["mock-provider", ["mockplugin"]]]),
+        modelCatalogProviders: empty,
+        cliBackends: empty,
+        setupProviders: empty,
+        commandAliases: empty,
+        contracts: new Map([["tools", ["mockplugin"]]]),
+      },
+    } as unknown as PluginLookUpTable;
+
+    expect(listPluginContributionIds({ lookUpTable, contribution: "providers" })).toEqual([
+      "mock-provider",
+    ]);
+    expect(listPluginContributionIds({ lookUpTable, contribution: "contracts" })).toEqual([
+      "tools",
+    ]);
+    expect(
+      resolvePluginContributionOwners({
+        lookUpTable,
+        contribution: "providers",
+        matches: "mock-provider",
+      }),
+    ).toEqual(["mockplugin"]);
   });
 
   it("normalizes plugin config ids through registry contribution aliases", () => {
