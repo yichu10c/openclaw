@@ -15,6 +15,17 @@ const EMPTY_SESSION_CFG = {
   },
 } satisfies OpenClawConfig;
 
+function createUnreadableIteratorArray<T>(entries: T[], message: string): T[] {
+  return new Proxy(entries, {
+    get(target, prop, receiver) {
+      if (prop === Symbol.iterator) {
+        throw new Error(message);
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+}
+
 describe("createChannelNativeOriginTargetResolver", () => {
   it("reuses shared turn-source routing and respects shouldHandle gating", () => {
     const resolveOriginTarget = createChannelNativeOriginTargetResolver<NativeApprovalTarget>({
@@ -113,6 +124,42 @@ describe("createChannelNativeOriginTargetResolver", () => {
         },
       }),
     ).toEqual({ to: "-100123", threadId: 42.9 });
+  });
+
+  it("does not throw while comparing unreadable synthetic native approval targets", () => {
+    const target = {} as NativeApprovalTarget;
+    Object.defineProperty(target, "to", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin approval target getter failed");
+      },
+    });
+
+    expect(
+      nativeApprovalTargetsMatch({
+        channel: "mockchannel",
+        left: target,
+        right: { to: "mock-user" },
+      }),
+    ).toBe(false);
+  });
+
+  it("fails closed when synthetic native approval target identity fields are unreadable", () => {
+    const target = { to: "mock-user" } as NativeApprovalTarget;
+    Object.defineProperty(target, "threadId", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin approval thread getter failed");
+      },
+    });
+
+    expect(
+      nativeApprovalTargetsMatch({
+        channel: "mockchannel",
+        left: target,
+        right: { to: "mock-user" },
+      }),
+    ).toBe(false);
   });
 
   it("normalizes resolved targets before matching origin candidates", () => {
@@ -271,6 +318,37 @@ describe("createChannelApproverDmTargetResolver", () => {
         },
       }),
     ).toStrictEqual([]);
+  });
+
+  it("copies synthetic approver lists without trusting iterators", () => {
+    const resolveApproverDmTargets = createChannelApproverDmTargetResolver<string>({
+      resolveApprovers: () =>
+        createUnreadableIteratorArray(
+          ["mock-user-1", "fuzz-user", "mock-user-2"],
+          "fuzzplugin approver iterator failed",
+        ),
+      mapApprover: (approver) => {
+        if (approver === "fuzz-user") {
+          throw new Error("fuzzplugin approver mapper failed");
+        }
+        return { to: approver };
+      },
+    });
+
+    expect(
+      resolveApproverDmTargets({
+        cfg: {},
+        request: {
+          id: "plugin-approval-1",
+          request: {
+            agentId: "mock-agent",
+          },
+          policy: {
+            alwaysAllow: false,
+          },
+        },
+      }),
+    ).toStrictEqual([{ to: "mock-user-1" }, { to: "mock-user-2" }]);
   });
 });
 

@@ -161,23 +161,119 @@ export type NativeApprovalTarget = {
   threadId?: string | number | null;
 };
 
+const MAX_NATIVE_APPROVAL_LIST_ENTRIES = 10_000;
+
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!record || typeof record !== "object") {
+    return undefined;
+  }
+  const result = tryReadRecordValue(record, key);
+  return result.readable ? result.value : undefined;
+}
+
+function tryReadRecordValue(
+  record: object,
+  key: string,
+): { readable: true; value: unknown } | { readable: false } {
+  try {
+    return { readable: true, value: (record as Record<string, unknown>)[key] };
+  } catch {
+    return { readable: false };
+  }
+}
+
+function hasRecordKey(record: unknown, key: string): boolean {
+  if (!record || typeof record !== "object") {
+    return false;
+  }
+  try {
+    return key in record;
+  } catch {
+    return false;
+  }
+}
+
+function copyArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const safeLength = Math.min(Math.max(0, length), MAX_NATIVE_APPROVAL_LIST_ENTRIES);
+  const entries: unknown[] = [];
+  for (let index = 0; index < safeLength; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      entries.push(undefined);
+    }
+  }
+  return entries;
+}
+
+function callOr<T>(callback: () => T, fallback: T): T {
+  try {
+    return callback();
+  } catch {
+    return fallback;
+  }
+}
+
+function readNativeApprovalTarget(value: unknown): NativeApprovalTarget | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const to = tryReadRecordValue(value, "to");
+  if (!to.readable || typeof to.value !== "string") {
+    return undefined;
+  }
+  const accountId = tryReadRecordValue(value, "accountId");
+  if (!accountId.readable) {
+    return undefined;
+  }
+  const threadId = tryReadRecordValue(value, "threadId");
+  if (!threadId.readable) {
+    return undefined;
+  }
+  return {
+    to: to.value,
+    ...(typeof accountId.value === "string" || accountId.value === null
+      ? { accountId: accountId.value }
+      : {}),
+    ...(typeof threadId.value === "string" ||
+    typeof threadId.value === "number" ||
+    threadId.value === null
+      ? { threadId: threadId.value }
+      : {}),
+  };
+}
+
 export function nativeApprovalTargetsMatch(params: {
   channel?: string | null;
   left: NativeApprovalTarget;
   right: NativeApprovalTarget;
 }): boolean {
+  const left = readNativeApprovalTarget(params.left);
+  const right = readNativeApprovalTarget(params.right);
+  if (!left || !right) {
+    return false;
+  }
   return channelRouteTargetsMatchExact({
     left: {
       channel: params.channel,
-      to: params.left.to,
-      accountId: params.left.accountId,
-      threadId: params.left.threadId,
+      to: left.to,
+      accountId: left.accountId,
+      threadId: left.threadId,
     },
     right: {
       channel: params.channel,
-      to: params.right.to,
-      accountId: params.right.accountId,
-      threadId: params.right.threadId,
+      to: right.to,
+      accountId: right.accountId,
+      threadId: right.threadId,
     },
   });
 }
@@ -259,9 +355,7 @@ export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
 }
 
 function isNativeApprovalTarget(value: unknown): value is NativeApprovalTarget {
-  return Boolean(
-    value && typeof value === "object" && typeof (value as { to?: unknown }).to === "string",
-  );
+  return readNativeApprovalTarget(value) !== undefined;
 }
 
 function nativeApprovalTargetMatcher(channel: string): (left: unknown, right: unknown) => boolean {
@@ -278,7 +372,7 @@ export function resolveApprovalKind(
   if (approvalKind) {
     return approvalKind;
   }
-  return "command" in request.request ? "exec" : "plugin";
+  return hasRecordKey(readRecordValue(request, "request"), "command") ? "exec" : "plugin";
 }
 
 function resolveApprovalForwardingConfig(params: {
@@ -452,72 +546,106 @@ export function createNativeApprovalForwardingFallbackSuppressor<
       nativeApprovalTargetsMatch({ channel: params.channel, left, right }));
 
   return (input: DeliverySuppressionInput): boolean => {
-    const forwardingTarget = params.normalizeForwardTarget(input.target);
+    const forwardingTarget = callOr(() => params.normalizeForwardTarget(input.target), null);
     if (!forwardingTarget) {
       return false;
     }
     const accountId =
       normalizeOptionalAccountId(
-        params.resolveAccountId?.({
-          forwardingTarget,
-          target: input.target,
-          request: input.request,
-        }),
+        callOr(
+          () =>
+            params.resolveAccountId?.({
+              forwardingTarget,
+              target: input.target,
+              request: input.request,
+            }),
+          undefined,
+        ),
       ) ??
       normalizeOptionalAccountId(forwardingTarget.accountId) ??
-      normalizeOptionalAccountId(input.request.request.turnSourceAccountId);
+      normalizeOptionalAccountId(
+        readRecordValue(readRecordValue(input.request, "request"), "turnSourceAccountId") as
+          | string
+          | null
+          | undefined,
+      );
     const approvalKind =
-      params.resolveApprovalKind?.({
-        approvalKind: input.approvalKind,
-        request: input.request,
-      }) ?? resolveApprovalKind(input.request, input.approvalKind);
-    const explicitTarget = input.target.source === "target";
+      callOr(
+        () =>
+          params.resolveApprovalKind?.({
+            approvalKind: input.approvalKind,
+            request: input.request,
+          }),
+        undefined,
+      ) ?? resolveApprovalKind(input.request, input.approvalKind);
+    const explicitTarget = readRecordValue(input.target, "source") === "target";
     const eligible = explicitTarget
-      ? (params.isExplicitTargetEligible?.({
-          cfg: input.cfg,
-          accountId,
-          approvalKind,
-          request: input.request,
-          target: input.target,
-        }) ?? false)
-      : params.isSessionRouteEligible({
-          cfg: input.cfg,
-          accountId,
-          approvalKind,
-          request: input.request,
-        });
+      ? callOr(
+          () =>
+            params.isExplicitTargetEligible?.({
+              cfg: input.cfg,
+              accountId,
+              approvalKind,
+              request: input.request,
+              target: input.target,
+            }) ?? false,
+          false,
+        )
+      : callOr(
+          () =>
+            params.isSessionRouteEligible({
+              cfg: input.cfg,
+              accountId,
+              approvalKind,
+              request: input.request,
+            }),
+          false,
+        );
     if (!eligible) {
       return false;
     }
 
     const forwardingTargetForMatch =
-      params.resolveForwardingTargetForMatch?.({
-        forwardingTarget,
-        accountId,
-        target: input.target,
-        approvalKind,
-        request: input.request,
-      }) ?? forwardingTarget;
+      callOr(
+        () =>
+          params.resolveForwardingTargetForMatch?.({
+            forwardingTarget,
+            accountId,
+            target: input.target,
+            approvalKind,
+            request: input.request,
+          }),
+        undefined,
+      ) ?? forwardingTarget;
     if (!forwardingTargetForMatch) {
       return false;
     }
-    const originTarget = params.resolveOriginTarget({
-      cfg: input.cfg,
-      accountId,
-      approvalKind,
-      request: input.request,
-    });
-    if (originTarget && targetsMatch(forwardingTargetForMatch, originTarget)) {
+    const originTarget = callOr(
+      () =>
+        params.resolveOriginTarget({
+          cfg: input.cfg,
+          accountId,
+          approvalKind,
+          request: input.request,
+        }),
+      null,
+    );
+    if (originTarget && callOr(() => targetsMatch(forwardingTargetForMatch, originTarget), false)) {
       return true;
     }
-    return params
-      .resolveApproverDmTargets({
-        cfg: input.cfg,
-        accountId,
-        approvalKind,
-        request: input.request,
-      })
-      .some((approverTarget) => targetsMatch(forwardingTargetForMatch, approverTarget));
+    const approverTargets = callOr(
+      () =>
+        params.resolveApproverDmTargets({
+          cfg: input.cfg,
+          accountId,
+          approvalKind,
+          request: input.request,
+        }),
+      [],
+    );
+    return copyArrayEntries(approverTargets).some((approverTarget) =>
+      callOr(() => targetsMatch(forwardingTargetForMatch, approverTarget as TTarget), false),
+    );
   };
 }
 
@@ -525,7 +653,7 @@ function createOriginTargetResolver<TTarget>(
   params: CustomOriginResolverParams<TTarget>,
 ): (input: ApprovalResolverParams) => TTarget | null {
   return (input: ApprovalResolverParams): TTarget | null => {
-    if (params.shouldHandleRequest && !params.shouldHandleRequest(input)) {
+    if (params.shouldHandleRequest && !callOr(() => params.shouldHandleRequest?.(input), false)) {
       return null;
     }
     const normalizeTarget = (target: TTarget | null): TTarget | null => {
@@ -533,29 +661,36 @@ function createOriginTargetResolver<TTarget>(
         return null;
       }
       return params.normalizeTarget
-        ? (params.normalizeTarget(target, input.request) ?? null)
+        ? callOr(() => params.normalizeTarget?.(target, input.request) ?? null, null)
         : target;
     };
     const normalizeTargetForMatch = (target: TTarget): TTarget | null =>
-      params.normalizeTargetForMatch?.(target, input.request) ?? target;
+      callOr(() => params.normalizeTargetForMatch?.(target, input.request) ?? target, null);
     return resolveApprovalRequestOriginTarget({
       cfg: input.cfg,
       request: input.request,
       channel: params.channel,
       accountId: input.accountId,
       resolveTurnSourceTarget: (request) =>
-        normalizeTarget(params.resolveTurnSourceTarget(request)),
+        normalizeTarget(callOr(() => params.resolveTurnSourceTarget(request), null)),
       resolveSessionTarget: (sessionTarget) =>
-        normalizeTarget(params.resolveSessionTarget(sessionTarget, input.request)),
+        normalizeTarget(
+          callOr(() => params.resolveSessionTarget(sessionTarget, input.request), null),
+        ),
       targetsMatch: (left, right) => {
         const normalizedLeft = normalizeTargetForMatch(left);
         const normalizedRight = normalizeTargetForMatch(right);
-        return Boolean(
-          normalizedLeft && normalizedRight && params.targetsMatch(normalizedLeft, normalizedRight),
+        return (
+          Boolean(normalizedLeft && normalizedRight) &&
+          callOr(
+            () => params.targetsMatch(normalizedLeft as TTarget, normalizedRight as TTarget),
+            false,
+          )
         );
       },
       resolveFallbackTarget: params.resolveFallbackTarget
-        ? (request) => normalizeTarget(params.resolveFallbackTarget?.(request) ?? null)
+        ? (request) =>
+            normalizeTarget(callOr(() => params.resolveFallbackTarget?.(request) ?? null, null))
         : undefined,
     });
   };
@@ -597,15 +732,20 @@ export function createChannelApproverDmTargetResolver<
   mapApprover: (approver: TApprover, params: ApprovalResolverParams) => TTarget | null | undefined;
 }) {
   return (input: ApprovalResolverParams): TTarget[] => {
-    if (params.shouldHandleRequest && !params.shouldHandleRequest(input)) {
+    if (params.shouldHandleRequest && !callOr(() => params.shouldHandleRequest?.(input), false)) {
       return [];
     }
     const targets: TTarget[] = [];
-    for (const approver of params.resolveApprovers({
-      cfg: input.cfg,
-      accountId: input.accountId,
-    })) {
-      const target = params.mapApprover(approver, input);
+    const approvers = callOr(
+      () =>
+        params.resolveApprovers({
+          cfg: input.cfg,
+          accountId: input.accountId,
+        }),
+      [],
+    );
+    for (const approver of copyArrayEntries(approvers)) {
+      const target = callOr(() => params.mapApprover(approver as TApprover, input), null);
       if (target) {
         targets.push(target);
       }
