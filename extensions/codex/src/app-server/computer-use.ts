@@ -95,6 +95,16 @@ type PluginInspection =
       status: CodexComputerUseStatus;
     };
 
+type PluginReadResult =
+  | {
+      ok: true;
+      plugin: CodexPluginDetail;
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+
 const CURATED_MARKETPLACE_POLL_INTERVAL_MS = 2_000;
 const COMPUTER_USE_MARKETPLACE_NAME_PRIORITY = ["openai-bundled", "openai-curated", "local"];
 const DEFAULT_CODEX_BUNDLED_MARKETPLACE_PATH =
@@ -234,11 +244,15 @@ async function ensureComputerUsePlugin(params: {
   marketplace: MarketplaceRef;
   installPlugin: boolean;
 }): Promise<PluginInspection> {
-  let plugin = await readComputerUsePlugin(
+  const initialPlugin = await readComputerUsePlugin(
     params.request,
     params.marketplace,
     params.config.pluginName,
   );
+  if (!initialPlugin.ok) {
+    return pluginCheckFailure(params.config, initialPlugin.message);
+  }
+  let plugin = initialPlugin.plugin;
   if (!plugin.summary.installed || !plugin.summary.enabled) {
     if (!params.installPlugin) {
       return {
@@ -269,11 +283,15 @@ async function ensureComputerUsePlugin(params: {
       pluginRequestParams(params.marketplace, params.config.pluginName),
     );
     await reloadMcpServers(params.request);
-    plugin = await readComputerUsePlugin(
+    const installedPlugin = await readComputerUsePlugin(
       params.request,
       params.marketplace,
       params.config.pluginName,
     );
+    if (!installedPlugin.ok) {
+      return pluginCheckFailure(params.config, installedPlugin.message);
+    }
+    plugin = installedPlugin.plugin;
   }
   if (!plugin.summary.installed || !plugin.summary.enabled) {
     return {
@@ -288,6 +306,20 @@ async function ensureComputerUsePlugin(params: {
     };
   }
   return { ok: true, plugin };
+}
+
+function pluginCheckFailure(
+  config: ResolvedCodexComputerUseConfig,
+  message: string,
+): PluginInspection {
+  return {
+    ok: false,
+    status: unavailableStatus(
+      config,
+      "check_failed",
+      `Computer Use plugin check failed: ${message}`,
+    ),
+  };
 }
 
 async function readComputerUseTools(params: {
@@ -529,12 +561,16 @@ async function readComputerUsePlugin(
   request: CodexComputerUseRequest,
   marketplace: MarketplaceRef,
   pluginName: string,
-): Promise<CodexPluginDetail> {
-  const response = await request<CodexPluginReadResponse>(
-    "plugin/read",
-    pluginRequestParams(marketplace, pluginName),
-  );
-  return response.plugin;
+): Promise<PluginReadResult> {
+  try {
+    const response = await request<CodexPluginReadResponse>(
+      "plugin/read",
+      pluginRequestParams(marketplace, pluginName),
+    );
+    return { ok: true, plugin: response.plugin };
+  } catch {
+    return { ok: false, message: `${pluginName} plugin detail is unreadable` };
+  }
 }
 
 async function readMcpServerStatus(

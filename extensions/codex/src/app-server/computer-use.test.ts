@@ -115,6 +115,28 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "plugin/install");
   });
 
+  it("fails closed when Computer Use plugin detail is unreadable during install", async () => {
+    const request = createComputerUseRequest({
+      installed: false,
+      unreadablePluginDetail: true,
+    });
+
+    await expectSetupErrorStatus(
+      installCodexComputerUse({
+        pluginConfig: { computerUse: { marketplaceName: "desktop-tools" } },
+        request,
+      }),
+      {
+        ready: false,
+        reason: "check_failed",
+        installed: false,
+        pluginEnabled: false,
+        message: "Computer Use plugin check failed: computer-use plugin detail is unreadable",
+      },
+    );
+    expectRequestMethodNotCalled(request, "plugin/install");
+  });
+
   it("does not register marketplace sources during status checks", async () => {
     const request = createComputerUseRequest({ installed: true });
 
@@ -512,6 +534,7 @@ function createComputerUseRequest(params: {
   enabled?: boolean;
   marketplaceAvailableAfterListCalls?: number;
   unreadableMcpTools?: boolean;
+  unreadablePluginDetail?: boolean;
 }): CodexComputerUseRequest {
   let installed = params.installed;
   let enabled = params.enabled ?? installed;
@@ -548,6 +571,13 @@ function createComputerUseRequest(params: {
     }
     if (method === "plugin/read") {
       expect(requireRecord(requestParams, "plugin read params").pluginName).toBe("computer-use");
+      if (params.unreadablePluginDetail) {
+        return {
+          get plugin() {
+            throw new Error("fuzzplugin computer-use plugin detail read failed");
+          },
+        };
+      }
       return {
         plugin: {
           marketplaceName: "desktop-tools",
