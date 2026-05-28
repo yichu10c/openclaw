@@ -6,6 +6,47 @@ import {
 } from "../shared/string-coerce.js";
 import type { ProviderCatalogContext, ProviderCatalogResult } from "./types.js";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+function copyProviderEntries(value: unknown): Array<[string, ModelProviderConfig]> {
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return [];
+  }
+
+  const entries: Array<[string, ModelProviderConfig]> = [];
+  for (const key of keys) {
+    try {
+      const provider = value[key];
+      if (isRecord(provider)) {
+        entries.push([key, provider as ModelProviderConfig]);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
+function addApiKeyToProvider(
+  provider: ModelProviderConfig,
+  apiKey: string,
+): (ModelProviderConfig & { apiKey: string }) | undefined {
+  try {
+    return { ...provider, apiKey };
+  } catch {
+    return undefined;
+  }
+}
+
 export function findCatalogTemplate(params: {
   entries: ReadonlyArray<{ provider: string; id: string }>;
   providerId: string;
@@ -66,7 +107,10 @@ export async function buildPairedProviderApiKeyCatalog(params: {
   const providers = await params.buildProviders();
   return {
     providers: Object.fromEntries(
-      Object.entries(providers).map(([id, provider]) => [id, { ...provider, apiKey }]),
+      copyProviderEntries(providers).flatMap(([id, provider]) => {
+        const providerWithApiKey = addApiKeyToProvider(provider, apiKey);
+        return providerWithApiKey ? [[id, providerWithApiKey]] : [];
+      }),
     ),
   };
 }
