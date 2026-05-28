@@ -18,6 +18,106 @@ type WebProviderSortEntry = {
   autoDetectOrder?: number;
 };
 
+const REQUIRED_WEB_PROVIDER_METHODS = [
+  "createTool",
+  "getCredentialValue",
+  "setCredentialValue",
+] as const;
+const REQUIRED_WEB_PROVIDER_STRING_FIELDS = [
+  "label",
+  "hint",
+  "placeholder",
+  "signupUrl",
+  "credentialPath",
+] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function copyRecordKeys(value: unknown): string[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  try {
+    return Object.keys(value);
+  } catch {
+    return [];
+  }
+}
+
+function copyStringArrayValue(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  try {
+    return value.every((entry) => typeof entry === "string") ? [...value] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function copyProviderWithPluginId<TProvider extends { id: string }>(
+  provider: TProvider,
+  pluginId: string,
+): (TProvider & { pluginId: string }) | undefined {
+  if (!isRecord(provider)) {
+    return undefined;
+  }
+  const id = readRecordValue(provider, "id");
+  if (typeof id !== "string" || !id) {
+    return undefined;
+  }
+  const copy: Record<string, unknown> = { id, pluginId };
+  for (const key of REQUIRED_WEB_PROVIDER_STRING_FIELDS) {
+    const value = readRecordValue(provider, key);
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    copy[key] = value;
+  }
+  const envVars = copyStringArrayValue(readRecordValue(provider, "envVars"));
+  if (!envVars) {
+    return undefined;
+  }
+  copy.envVars = envVars;
+  for (const key of REQUIRED_WEB_PROVIDER_METHODS) {
+    const value = readRecordValue(provider, key);
+    if (typeof value !== "function") {
+      return undefined;
+    }
+    copy[key] = value;
+  }
+  for (const key of copyRecordKeys(provider)) {
+    if (
+      key === "id" ||
+      key === "pluginId" ||
+      key === "envVars" ||
+      REQUIRED_WEB_PROVIDER_STRING_FIELDS.some((requiredKey) => requiredKey === key) ||
+      REQUIRED_WEB_PROVIDER_METHODS.some((requiredKey) => requiredKey === key)
+    ) {
+      continue;
+    }
+    try {
+      copy[key] = provider[key];
+    } catch {
+      // Skip unreadable optional provider metadata; the provider id still declares availability.
+    }
+  }
+  return copy as TProvider & { pluginId: string };
+}
+
 function comparePluginProvidersAlphabetically(
   left: Pick<WebProviderSortEntry, "id" | "pluginId">,
   right: Pick<WebProviderSortEntry, "id" | "pluginId">,
@@ -49,15 +149,19 @@ function pluginManifestDeclaresProviderConfig(
   configKey: WebProviderConfigKey,
   contract: WebProviderContract,
 ): boolean {
-  if ((record.contracts?.[contract]?.length ?? 0) > 0) {
+  const contractValues = readRecordValue(readRecordValue(record, "contracts"), contract);
+  if (Array.isArray(contractValues) && contractValues.length > 0) {
     return true;
   }
-  const configUiHintKeys = Object.keys(record.configUiHints ?? {});
+  const configUiHintKeys = copyRecordKeys(readRecordValue(record, "configUiHints"));
   if (configUiHintKeys.some((key) => key === configKey || key.startsWith(`${configKey}.`))) {
     return true;
   }
-  const properties = record.configSchema?.properties;
-  return typeof properties === "object" && properties !== null && configKey in properties;
+  const properties = readRecordValue(readRecordValue(record, "configSchema"), "properties");
+  if (!isRecord(properties)) {
+    return false;
+  }
+  return copyRecordKeys(properties).includes(configKey);
 }
 
 function loadInstalledWebProviderManifestRecords(params: {
@@ -187,6 +291,9 @@ export function mapRegistryProviders<TProvider extends { id: string }>(params: {
   return params.sortProviders(
     params.entries
       .filter((entry) => !onlyPluginIdSet || onlyPluginIdSet.has(entry.pluginId))
-      .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId })),
+      .flatMap((entry) => {
+        const provider = copyProviderWithPluginId(entry.provider, entry.pluginId);
+        return provider ? [provider] : [];
+      }),
   );
 }
