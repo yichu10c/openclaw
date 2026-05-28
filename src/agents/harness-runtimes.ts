@@ -17,6 +17,67 @@ function isSelectablePluginRuntime(runtime: string | undefined): runtime is stri
   );
 }
 
+const MAX_AGENT_HARNESS_CONFIG_LIST_ENTRIES = 10_000;
+
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!record || typeof record !== "object") {
+    return undefined;
+  }
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function copyArrayEntries(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const safeLength = Math.min(Math.max(0, length), MAX_AGENT_HARNESS_CONFIG_LIST_ENTRIES);
+  const entries: unknown[] = [];
+  for (let index = 0; index < safeLength; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      entries.push(undefined);
+    }
+  }
+  return entries;
+}
+
+function copyRecordKeys(value: unknown): string[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  try {
+    return Object.keys(value);
+  } catch {
+    return [];
+  }
+}
+
+function copyRecordValues(value: unknown): unknown[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  const values: unknown[] = [];
+  for (const key of copyRecordKeys(value)) {
+    try {
+      values.push(value[key]);
+    } catch {
+      // Ignore unreadable config entries; other readable model runtime config still applies.
+    }
+  }
+  return values;
+}
+
 function listAgentModelRefs(value: unknown): string[] {
   if (typeof value === "string") {
     return [value];
@@ -25,14 +86,13 @@ function listAgentModelRefs(value: unknown): string[] {
     return [];
   }
   const refs: string[] = [];
-  if (typeof value.primary === "string") {
-    refs.push(value.primary);
+  const primary = readRecordValue(value, "primary");
+  if (typeof primary === "string") {
+    refs.push(primary);
   }
-  if (Array.isArray(value.fallbacks)) {
-    for (const fallback of value.fallbacks) {
-      if (typeof fallback === "string") {
-        refs.push(fallback);
-      }
+  for (const fallback of copyArrayEntries(readRecordValue(value, "fallbacks")) ?? []) {
+    if (typeof fallback === "string") {
+      refs.push(fallback);
     }
   }
   return refs;
@@ -85,13 +145,19 @@ function resolveConfiguredModelHarnessRuntime(params: {
 }
 
 function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<string>): void {
-  for (const providerConfig of Object.values(config.models?.providers ?? {})) {
-    const providerRuntime = normalizeConfiguredRuntimeId(providerConfig?.agentRuntime?.id);
+  for (const providerConfig of copyRecordValues(
+    readRecordValue(readRecordValue(config, "models"), "providers"),
+  )) {
+    const providerRuntime = normalizeConfiguredRuntimeId(
+      readRecordValue(readRecordValue(providerConfig, "agentRuntime"), "id"),
+    );
     if (isSelectablePluginRuntime(providerRuntime)) {
       runtimes.add(providerRuntime);
     }
-    for (const modelConfig of providerConfig?.models ?? []) {
-      const modelRuntime = normalizeConfiguredRuntimeId(modelConfig?.agentRuntime?.id);
+    for (const modelConfig of copyArrayEntries(readRecordValue(providerConfig, "models")) ?? []) {
+      const modelRuntime = normalizeConfiguredRuntimeId(
+        readRecordValue(readRecordValue(modelConfig, "agentRuntime"), "id"),
+      );
       if (isSelectablePluginRuntime(modelRuntime)) {
         runtimes.add(modelRuntime);
       }
@@ -101,22 +167,24 @@ function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<str
     if (!isRecord(models)) {
       return;
     }
-    for (const entry of Object.values(models)) {
+    for (const entry of copyRecordValues(models)) {
       if (!isRecord(entry)) {
         continue;
       }
       const runtime = normalizeConfiguredRuntimeId(
-        isRecord(entry.agentRuntime) ? entry.agentRuntime.id : undefined,
+        readRecordValue(readRecordValue(entry, "agentRuntime"), "id"),
       );
       if (isSelectablePluginRuntime(runtime)) {
         runtimes.add(runtime);
       }
     }
   };
-  pushModelMapRuntimeIds(config.agents?.defaults?.models);
-  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
+  const agentsConfig = readRecordValue(config, "agents");
+  const defaults = readRecordValue(agentsConfig, "defaults");
+  pushModelMapRuntimeIds(readRecordValue(defaults, "models"));
+  const agents = copyArrayEntries(readRecordValue(agentsConfig, "list")) ?? [];
   for (const agent of agents) {
-    pushModelMapRuntimeIds(isRecord(agent) ? agent.models : undefined);
+    pushModelMapRuntimeIds(isRecord(agent) ? readRecordValue(agent, "models") : undefined);
   }
 }
 
@@ -142,27 +210,31 @@ function pushConfiguredAgentModelRuntimeIds(
     if (!isRecord(models)) {
       return;
     }
-    pushModelRefs(Object.keys(models), agentId);
+    pushModelRefs(copyRecordKeys(models), agentId);
   };
 
-  const defaultsModel = config.agents?.defaults?.model;
+  const agentsConfig = readRecordValue(config, "agents");
+  const defaults = readRecordValue(agentsConfig, "defaults");
+  const defaultsModel = readRecordValue(defaults, "model");
   const defaultsModelRefs: string[] = [];
   pushAgentModelRefs(defaultsModelRefs, defaultsModel);
   pushModelRefs(defaultsModelRefs);
-  pushModelMapRefs(config.agents?.defaults?.models);
+  pushModelMapRefs(readRecordValue(defaults, "models"));
 
-  if (!Array.isArray(config.agents?.list)) {
+  const agents = copyArrayEntries(readRecordValue(agentsConfig, "list"));
+  if (!agents) {
     return;
   }
-  for (const agent of config.agents.list) {
+  for (const agent of agents) {
     if (!isRecord(agent)) {
       continue;
     }
-    const agentId = typeof agent.id === "string" ? agent.id : undefined;
+    const id = readRecordValue(agent, "id");
+    const agentId = typeof id === "string" ? id : undefined;
     const selectedModelRefs: string[] = [];
-    pushAgentModelRefs(selectedModelRefs, agent.model ?? defaultsModel);
+    pushAgentModelRefs(selectedModelRefs, readRecordValue(agent, "model") ?? defaultsModel);
     pushModelRefs(selectedModelRefs, agentId);
-    pushModelMapRefs(agent.models, agentId);
+    pushModelMapRefs(readRecordValue(agent, "models"), agentId);
   }
 }
 

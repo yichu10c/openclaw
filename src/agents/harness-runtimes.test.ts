@@ -60,6 +60,64 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
     expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
   });
 
+  it("collects runtimes without using hostile fallback iterators", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: Object.assign(["openai/gpt-5.5"], {
+              [Symbol.iterator]() {
+                throw new Error("fuzzplugin fallback iterator failed");
+              },
+            }),
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
+  });
+
+  it("skips unreadable model maps and provider model entries while preserving readable runtimes", () => {
+    const config = {
+      models: {
+        providers: {
+          get fuzzplugin() {
+            throw new Error("fuzzplugin provider config read failed");
+          },
+          mockplugin: {
+            models: Object.assign(
+              [
+                {
+                  agentRuntime: { id: "claude" },
+                },
+              ],
+              {
+                [Symbol.iterator]() {
+                  throw new Error("mockplugin model iterator failed");
+                },
+              },
+            ),
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: new Proxy(
+            {},
+            {
+              ownKeys() {
+                throw new Error("fuzzplugin model map keys failed");
+              },
+            },
+          ),
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["claude"]);
+  });
+
   it("respects explicit OpenClaw runtime policy on selectable OpenAI agent models", () => {
     const config = {
       agents: {

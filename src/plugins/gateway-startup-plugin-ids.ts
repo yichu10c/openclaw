@@ -63,12 +63,57 @@ const CORE_BUILT_IN_MODEL_APIS = new Set([
   "openai-completions",
   "openai-responses",
 ]);
+const MAX_GATEWAY_STARTUP_CONFIG_LIST_ENTRIES = 10_000;
+
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!record || typeof record !== "object") {
+    return undefined;
+  }
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function copyArrayEntries(value: unknown): unknown[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const safeLength = Math.min(Math.max(0, length), MAX_GATEWAY_STARTUP_CONFIG_LIST_ENTRIES);
+  const entries: unknown[] = [];
+  for (let index = 0; index < safeLength; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      entries.push(undefined);
+    }
+  }
+  return entries;
+}
+
+function copyRecordKeys(value: unknown): string[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  try {
+    return Object.keys(value);
+  } catch {
+    return [];
+  }
+}
 
 function isConfigActivationValueEnabled(value: unknown): boolean {
   if (value === false) {
     return false;
   }
-  if (isRecord(value) && value.enabled === false) {
+  if (isRecord(value) && readRecordValue(value, "enabled") === false) {
     return false;
   }
   return true;
@@ -102,7 +147,11 @@ function resolveMemorySlotStartupPluginId(params: {
   normalizePluginId: (pluginId: string) => string;
 }): string | undefined {
   const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
-  const configuredSlot = activationSourceConfig.plugins?.slots?.memory?.trim();
+  const configuredSlotValue = readRecordValue(
+    readRecordValue(readRecordValue(activationSourceConfig, "plugins"), "slots"),
+    "memory",
+  );
+  const configuredSlot = typeof configuredSlotValue === "string" ? configuredSlotValue.trim() : "";
   if (configuredSlot?.toLowerCase() === "none") {
     return undefined;
   }
@@ -128,7 +177,11 @@ function resolveContextEngineSlotStartupPluginId(params: {
   normalizePluginId: (pluginId: string) => string;
 }): string | undefined {
   const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
-  const configuredSlot = activationSourceConfig.plugins?.slots?.contextEngine?.trim();
+  const configuredSlotValue = readRecordValue(
+    readRecordValue(readRecordValue(activationSourceConfig, "plugins"), "slots"),
+    "contextEngine",
+  );
+  const configuredSlot = typeof configuredSlotValue === "string" ? configuredSlotValue.trim() : "";
   if (!configuredSlot) {
     return undefined;
   }
@@ -230,11 +283,18 @@ function manifestOwnsConfiguredSpeechProvider(params: {
 }
 
 function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): ReadonlySet<string> {
-  const search = config.tools?.web?.search;
-  if (search?.enabled === false || typeof search?.provider !== "string") {
+  const search = readRecordValue(
+    readRecordValue(readRecordValue(config, "tools"), "web"),
+    "search",
+  );
+  if (!isRecord(search)) {
     return new Set();
   }
-  const providerId = normalizeOptionalLowercaseString(search.provider);
+  const provider = readRecordValue(search, "provider");
+  if (readRecordValue(search, "enabled") === false || typeof provider !== "string") {
+    return new Set();
+  }
+  const providerId = normalizeOptionalLowercaseString(provider);
   return providerId ? new Set([providerId]) : new Set();
 }
 
@@ -259,14 +319,13 @@ function listModelProviderRefs(value: unknown): string[] {
     return [];
   }
   const refs: string[] = [];
-  if (typeof value.primary === "string") {
-    refs.push(value.primary);
+  const primary = readRecordValue(value, "primary");
+  if (typeof primary === "string") {
+    refs.push(primary);
   }
-  if (Array.isArray(value.fallbacks)) {
-    for (const fallback of value.fallbacks) {
-      if (typeof fallback === "string") {
-        refs.push(fallback);
-      }
+  for (const fallback of copyArrayEntries(readRecordValue(value, "fallbacks")) ?? []) {
+    if (typeof fallback === "string") {
+      refs.push(fallback);
     }
   }
   return refs;
@@ -338,22 +397,23 @@ function collectConfiguredAgentModelProviderIds(
     if (!isRecord(models)) {
       return;
     }
-    for (const modelRef of Object.keys(models)) {
+    for (const modelRef of copyRecordKeys(models)) {
       addModelProviderRefs(modelRef);
     }
   };
 
-  const defaults = config.agents?.defaults;
-  addModelProviderRefs(defaults?.model);
-  addModelMapProviderIds(defaults?.models);
+  const agentsConfig = readRecordValue(config, "agents");
+  const defaults = readRecordValue(agentsConfig, "defaults");
+  addModelProviderRefs(readRecordValue(defaults, "model"));
+  addModelMapProviderIds(readRecordValue(defaults, "models"));
 
-  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
+  const agents = copyArrayEntries(readRecordValue(agentsConfig, "list")) ?? [];
   for (const agent of agents) {
     if (!isRecord(agent)) {
       continue;
     }
-    addModelProviderRefs(agent.model);
-    addModelMapProviderIds(agent.models);
+    addModelProviderRefs(readRecordValue(agent, "model"));
+    addModelMapProviderIds(readRecordValue(agent, "models"));
   }
 
   return new Set(
@@ -378,11 +438,16 @@ function configuredModelProviderNeedsRuntimePlugin(params: {
   providerId: string;
   modelId: string;
 }): boolean {
-  const providerConfig = params.config.models?.providers?.[params.providerId];
-  const configuredModel = providerConfig?.models?.find((model) => model.id === params.modelId);
+  const providerConfig = readRecordValue(
+    readRecordValue(readRecordValue(params.config, "models"), "providers"),
+    params.providerId,
+  );
+  const configuredModel = (copyArrayEntries(readRecordValue(providerConfig, "models")) ?? []).find(
+    (model) => isRecord(model) && readRecordValue(model, "id") === params.modelId,
+  );
   const modelApi =
-    configuredModel?.api ??
-    providerConfig?.api ??
+    (isRecord(configuredModel) ? readRecordValue(configuredModel, "api") : undefined) ??
+    readRecordValue(providerConfig, "api") ??
     params.manifestModelProviders.modelApis.get(
       buildModelCatalogMergeKey(params.providerId, params.modelId),
     );
@@ -407,11 +472,17 @@ function manifestOwnsConfiguredModelProvider(params: {
 function collectConfiguredGenerationProviderIds(
   config: OpenClawConfig,
 ): ConfiguredGenerationProviderIds {
-  const defaults = config.agents?.defaults;
+  const defaults = readRecordValue(readRecordValue(config, "agents"), "defaults");
   return {
-    imageGenerationProviders: collectModelProviderIds(defaults?.imageGenerationModel),
-    videoGenerationProviders: collectModelProviderIds(defaults?.videoGenerationModel),
-    musicGenerationProviders: collectModelProviderIds(defaults?.musicGenerationModel),
+    imageGenerationProviders: collectModelProviderIds(
+      readRecordValue(defaults, "imageGenerationModel"),
+    ),
+    videoGenerationProviders: collectModelProviderIds(
+      readRecordValue(defaults, "videoGenerationModel"),
+    ),
+    musicGenerationProviders: collectModelProviderIds(
+      readRecordValue(defaults, "musicGenerationModel"),
+    ),
   };
 }
 

@@ -125,6 +125,58 @@ describe("resolveModelRuntimePolicy", () => {
     });
   });
 
+  it("skips unreadable agent model maps while resolving runtime policy", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: new Proxy(
+            {},
+            {
+              ownKeys() {
+                throw new Error("fuzzplugin model map keys failed");
+              },
+            },
+          ),
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({
+        config,
+        provider: "openai",
+        modelId: "gpt-5.5",
+      }),
+    ).toEqual({});
+  });
+
+  it("checks provider model configs without using hostile array methods", () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            models: Object.assign([createModelConfig("codex")], {
+              find() {
+                throw new Error("mockplugin provider models find failed");
+              },
+            }),
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveModelRuntimePolicy({
+        config,
+        provider: "openai",
+        modelId: "qwen-local",
+      }),
+    ).toEqual({
+      policy: { id: "codex" },
+      source: "model",
+    });
+  });
+
   it("honors provider wildcard agent model runtime policy entries without a concrete model id", () => {
     const config = {
       agents: {

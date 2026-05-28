@@ -705,6 +705,72 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["demo-channel", "browser", "amazon-bedrock", "memory-core"],
     ],
     [
+      "includes bundled model providers without using hostile fallback iterators",
+      {
+        agents: {
+          defaults: {
+            model: {
+              primary: "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+              fallbacks: Object.assign(["google/gemini-3-pro-preview"], {
+                [Symbol.iterator]() {
+                  throw new Error("fuzzplugin fallback iterator failed");
+                },
+              }),
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["demo-channel", "browser", "google", "amazon-bedrock", "memory-core"],
+    ],
+    [
+      "includes bundled model providers while skipping unreadable model maps",
+      {
+        agents: {
+          defaults: {
+            model: {
+              primary: "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            },
+            models: new Proxy(
+              {},
+              {
+                ownKeys() {
+                  throw new Error("mockplugin model map keys failed");
+                },
+              },
+            ),
+          },
+        },
+      } as OpenClawConfig,
+      ["demo-channel", "browser", "amazon-bedrock", "memory-core"],
+    ],
+    [
+      "checks configured model provider metadata without using hostile model array methods",
+      {
+        agents: {
+          defaults: {
+            model: {
+              primary: "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            },
+          },
+        },
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              models: Object.assign(
+                [{ id: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", api: "custom-api" }],
+                {
+                  find() {
+                    throw new Error("fuzzplugin provider models find failed");
+                  },
+                },
+              ),
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["demo-channel", "browser", "amazon-bedrock", "memory-core"],
+    ],
+    [
       "honors explicit plugin disablement for selected model providers",
       {
         agents: {
