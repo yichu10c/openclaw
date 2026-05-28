@@ -44,7 +44,39 @@ function resolveMessageSenderGroupEntries(params: {
   if (params.group.type !== "message.senders") {
     return [];
   }
-  return [...(params.group.members["*"] ?? []), ...(params.group.members[params.channel] ?? [])];
+  return [
+    ...copyStringArrayEntries(params.group.members["*"]),
+    ...copyStringArrayEntries(params.group.members[params.channel]),
+  ];
+}
+
+function copyStringArrayEntries(value: readonly string[] | null | undefined): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+
+  const entries: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      if (!(index in value)) {
+        continue;
+      }
+      const entry = value[index];
+      if (typeof entry === "string") {
+        entries.push(entry);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return entries;
 }
 
 function copyAllowFromEntries(allowFrom: Array<string | number> | null | undefined): string[] {

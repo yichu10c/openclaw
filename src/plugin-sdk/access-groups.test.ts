@@ -95,4 +95,37 @@ describe("access group allowlists", () => {
       }),
     ).resolves.toEqual(["accessGroup:owners", "42", "owner"]);
   });
+
+  it("matches sender groups without using source member array iterators", async () => {
+    const members = Object.assign(["owner"], {
+      [Symbol.iterator]() {
+        throw new Error("fuzzplugin access group member iterator failed");
+      },
+    });
+    const globalMembers = Object.assign(["global-owner"], {
+      [Symbol.iterator]() {
+        throw new Error("mockplugin access group member iterator failed");
+      },
+    });
+
+    const state = await resolveAccessGroupAllowFromState({
+      accessGroups: {
+        owners: {
+          type: "message.senders",
+          members: {
+            "*": globalMembers,
+            telegram: members,
+          },
+        },
+      } as OpenClawConfig["accessGroups"],
+      allowFrom: ["accessGroup:owners"],
+      channel: "telegram",
+      accountId: "default",
+      senderId: "owner",
+      isSenderAllowed: (senderId, entries) => entries.includes(senderId),
+    });
+
+    expect(state.matched).toEqual(["owners"]);
+    expect(state.matchedAllowFromEntries).toEqual(["accessGroup:owners"]);
+  });
 });
