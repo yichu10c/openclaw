@@ -238,6 +238,71 @@ describe("defineSingleProviderPluginEntry", () => {
     });
   });
 
+  it("omits unreadable provider catalog maps before unified model projection", async () => {
+    const providers = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("fuzzplugin provider catalog key enumeration failed");
+        },
+      },
+    );
+    const entry = defineSingleProviderPluginEntry({
+      id: "fuzzplugin",
+      name: "Fuzz Provider",
+      description: "Synthetic provider plugin",
+      provider: {
+        label: "Fuzz",
+        docsPath: "/providers/fuzzplugin",
+        catalog: {
+          run: async () => ({ providers }),
+        },
+      },
+    });
+
+    const { unifiedCatalog } = await captureProviderEntry({ entry });
+    expect(unifiedCatalog).toEqual([]);
+  });
+
+  it("projects readable provider catalog models without using source array methods", async () => {
+    const models = Object.assign([createModel("fuzz-model", "Fuzz Model")], {
+      map() {
+        throw new Error("fuzzplugin provider model map failed");
+      },
+    });
+    const entry = defineSingleProviderPluginEntry({
+      id: "fuzzplugin",
+      name: "Fuzz Provider",
+      description: "Synthetic provider plugin",
+      provider: {
+        label: "Fuzz",
+        docsPath: "/providers/fuzzplugin",
+        catalog: {
+          run: async () => ({
+            providers: {
+              mockplugin: {
+                api: "openai-completions",
+                baseUrl: "https://mockplugin.test/v1",
+                models,
+              },
+            },
+          }),
+        },
+      },
+    });
+
+    const { unifiedCatalog } = await captureProviderEntry({ entry });
+    expect(unifiedCatalog).toEqual([
+      {
+        kind: "text",
+        provider: "mockplugin",
+        model: "fuzz-model",
+        label: "Fuzz Model",
+        source: "live",
+      },
+    ]);
+  });
+
   it("registers extra non-api-key auth methods", async () => {
     const entry = defineSingleProviderPluginEntry({
       id: "demo",
