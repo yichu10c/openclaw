@@ -69,6 +69,36 @@ describe("plugin lifecycle trace", () => {
     );
   });
 
+  it("does not replace plugin lifecycle errors with unreadable trace details", () => {
+    process.env.OPENCLAW_PLUGIN_LIFECYCLE_TRACE = "true";
+    const error = new Error("plugin lifecycle failed");
+    const details = { pluginId: "fuzzplugin" };
+    Object.defineProperty(details, "toolName", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin trace detail read failed");
+      },
+    });
+
+    expect(() =>
+      tracePluginLifecyclePhase(
+        "mockplugin load",
+        () => {
+          throw error;
+        },
+        details as Record<string, boolean | number | string | undefined>,
+      ),
+    ).toThrow(error);
+
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    const message = String(requireErrorMessage());
+    expect(message).toContain('phase="mockplugin load"');
+    expect(message).toContain("status=error");
+    expect(message).toContain('pluginId="fuzzplugin"');
+    expect(message).not.toContain("trace detail read failed");
+  });
+
   it("emits failed async phases before rejecting", async () => {
     process.env.OPENCLAW_PLUGIN_LIFECYCLE_TRACE = "yes";
     const error = new Error("async boom");

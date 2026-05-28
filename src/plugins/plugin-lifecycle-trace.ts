@@ -12,6 +12,31 @@ function formatTraceValue(value: boolean | number | string): string {
   return JSON.stringify(value);
 }
 
+function formatTraceDetails(details: TraceDetails | undefined): string {
+  if (!details) {
+    return "";
+  }
+  let keys: string[];
+  try {
+    keys = Object.keys(details);
+  } catch {
+    return "";
+  }
+  const fields: string[] = [];
+  for (const key of keys) {
+    let value: TraceDetails[string];
+    try {
+      value = details[key];
+    } catch {
+      continue;
+    }
+    if (value !== undefined) {
+      fields.push(`${key}=${formatTraceValue(value)}`);
+    }
+  }
+  return fields.join(" ");
+}
+
 function emitPluginLifecycleTrace(params: {
   phase: string;
   start: bigint;
@@ -19,10 +44,7 @@ function emitPluginLifecycleTrace(params: {
   details?: TraceDetails;
 }): void {
   const elapsedMs = Number(process.hrtime.bigint() - params.start) / 1_000_000;
-  const detailText = Object.entries(params.details ?? {})
-    .filter((entry): entry is [string, boolean | number | string] => entry[1] !== undefined)
-    .map(([key, value]) => `${key}=${formatTraceValue(value)}`)
-    .join(" ");
+  const detailText = formatTraceDetails(params.details);
   const suffix = detailText ? ` ${detailText}` : "";
   console.error(
     `[plugins:lifecycle] phase=${JSON.stringify(params.phase)} ms=${elapsedMs.toFixed(2)} status=${params.status}${suffix}`,
