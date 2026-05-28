@@ -6,7 +6,9 @@ import {
   readPositiveIntegerParam,
   readNumberParam,
   readReactionParams,
+  readStringArrayParam,
   readStringOrNumberParam,
+  readStringParam,
 } from "./common.js";
 
 type TestActions = {
@@ -25,6 +27,24 @@ describe("createActionGate", () => {
     const gate = createActionGate<TestActions>({ reactions: false });
     expect(gate("reactions")).toBe(false);
     expect(gate("messages")).toBe(true);
+  });
+
+  it("fails closed when synthetic action gates are unreadable", () => {
+    const gate = createActionGate<TestActions>(
+      new Proxy(
+        {},
+        {
+          get(_target, prop) {
+            if (prop === "reactions") {
+              throw new Error("fuzzplugin action gate failed");
+            }
+            return undefined;
+          },
+        },
+      ) as TestActions,
+    );
+
+    expect(gate("reactions")).toBe(false);
   });
 });
 
@@ -168,6 +188,58 @@ describe("snake_case aliases", () => {
   });
 });
 
+describe("safe parameter reads", () => {
+  it("does not throw raw errors for unreadable synthetic param keys", () => {
+    const params = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor(_target, prop) {
+          if (prop === "to") {
+            throw new Error("fuzzplugin hasOwn failed");
+          }
+          return undefined;
+        },
+      },
+    ) as Record<string, unknown>;
+
+    expect(() => readStringParam(params, "to", { required: true })).toThrow("to required");
+  });
+
+  it("treats unreadable synthetic optional param values as absent", () => {
+    const params = {
+      get to() {
+        throw new Error("fuzzplugin param getter failed");
+      },
+    } as Record<string, unknown>;
+
+    expect(readStringParam(params, "to")).toBeUndefined();
+  });
+
+  it("copies synthetic string arrays without trusting array methods", () => {
+    const values = new Proxy(["mock-room", "skip-me", "mock-thread"], {
+      get(target, prop, receiver) {
+        if (prop === "filter") {
+          throw new Error("fuzzplugin filter failed");
+        }
+        if (prop === "1") {
+          throw new Error("fuzzplugin array entry failed");
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    expect(readStringArrayParam({ rooms: values }, "rooms")).toEqual(["mock-room", "mock-thread"]);
+  });
+
+  it("rejects oversized synthetic string arrays instead of truncating them", () => {
+    const values = Array.from({ length: 10_001 }, () => "mock-room");
+
+    expect(() => readStringArrayParam({ rooms: values }, "rooms")).toThrow(
+      "rooms supports at most 10000 entries",
+    );
+  });
+});
+
 describe("required parameter validation", () => {
   it("throws when required values are missing", () => {
     expect(() => readStringOrNumberParam({}, "chatId", { required: true })).toThrow(
@@ -204,6 +276,22 @@ describe("readReactionParams", () => {
       removeErrorMessage: "Emoji is required",
     });
     expect(result.remove).toBe(true);
+    expect(result.emoji).toBe("✅");
+  });
+
+  it("treats unreadable synthetic remove flags as absent", () => {
+    const params = {
+      emoji: "✅",
+      get remove() {
+        throw new Error("fuzzplugin remove getter failed");
+      },
+    } as Record<string, unknown>;
+
+    const result = readReactionParams(params, {
+      removeErrorMessage: "Emoji is required",
+    });
+
+    expect(result.remove).toBe(false);
     expect(result.emoji).toBe("✅");
   });
 });

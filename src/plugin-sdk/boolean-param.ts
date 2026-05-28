@@ -5,7 +5,7 @@ export function readBooleanParam(
   params: Record<string, unknown>,
   key: string,
 ): boolean | undefined {
-  const raw = params[key];
+  const raw = readParamValue(params, key);
   if (typeof raw === "boolean") {
     return raw;
   }
@@ -17,4 +17,12 @@ export function readBooleanParam(
     return false;
   }
   return undefined;
+}
+
+function readParamValue(params: Record<string, unknown>, key: string): unknown {
+  try {
+    return params[key];
+  } catch {
+    return undefined;
+  }
 }

@@ -17,6 +17,8 @@ import type {
 } from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
+const MAX_TOOL_PARAM_ARRAY_ENTRIES = 10_000;
+
 export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TParameters,
   TResult
@@ -79,7 +81,12 @@ export function createActionGate<T extends Record<string, boolean | undefined>>(
   actions: T | undefined,
 ): ActionGate<T> {
   return (key, defaultValue = true) => {
-    const value = actions?.[key];
+    let value: boolean | undefined;
+    try {
+      value = actions?.[key];
+    } catch {
+      return false;
+    }
     if (value === undefined) {
       return defaultValue;
     }
@@ -89,6 +96,34 @@ export function createActionGate<T extends Record<string, boolean | undefined>>(
 
 function readParamRaw(params: Record<string, unknown>, key: string): unknown {
   return readSnakeCaseParamRaw(params, key);
+}
+
+function copyStringParamArrayEntries(value: unknown, label: string): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length = 0;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  if (length > MAX_TOOL_PARAM_ARRAY_ENTRIES) {
+    throw new ToolInputError(`${label} supports at most ${MAX_TOOL_PARAM_ARRAY_ENTRIES} entries`);
+  }
+  const safeLength = Math.min(Math.max(0, length), MAX_TOOL_PARAM_ARRAY_ENTRIES);
+  const entries: string[] = [];
+  for (let index = 0; index < safeLength; index += 1) {
+    try {
+      const entry = value[index];
+      if (typeof entry === "string") {
+        entries.push(entry);
+      }
+    } catch {
+      // Unreadable tool/action param entries are treated as absent.
+    }
+  }
+  return entries;
 }
 
 export function readStringParam(
@@ -306,7 +341,7 @@ export function readStringArrayParam(
   const { required = false, label = key } = options;
   const raw = readParamRaw(params, key);
   if (Array.isArray(raw)) {
-    const values = normalizeStringEntries(raw.filter((entry) => typeof entry === "string"));
+    const values = normalizeStringEntries(copyStringParamArrayEntries(raw, label));
     if (values.length === 0) {
       if (required) {
         throw new ToolInputError(`${label} required`);
@@ -347,7 +382,8 @@ export function readReactionParams(
 ): ReactionParams {
   const emojiKey = options.emojiKey ?? "emoji";
   const removeKey = options.removeKey ?? "remove";
-  const remove = typeof params[removeKey] === "boolean" ? params[removeKey] : false;
+  const rawRemove = readParamRaw(params, removeKey);
+  const remove = typeof rawRemove === "boolean" ? rawRemove : false;
   const emoji = readStringParam(params, emojiKey, {
     required: true,
     allowEmpty: true,

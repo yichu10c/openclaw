@@ -11,11 +11,11 @@ export function resolveSnakeCaseParamKey(
   params: Record<string, unknown>,
   key: string,
 ): string | undefined {
-  if (Object.hasOwn(params, key)) {
+  if (hasOwnParamKey(params, key)) {
     return key;
   }
   const snakeKey = toSnakeCaseKey(key);
-  if (snakeKey !== key && Object.hasOwn(params, snakeKey)) {
+  if (snakeKey !== key && hasOwnParamKey(params, snakeKey)) {
     return snakeKey;
   }
   return undefined;
@@ -24,7 +24,23 @@ export function resolveSnakeCaseParamKey(
 export function readSnakeCaseParamRaw(params: Record<string, unknown>, key: string): unknown {
   const resolvedKey = resolveSnakeCaseParamKey(params, key);
   if (resolvedKey) {
-    return params[resolvedKey];
+    return readParamValue(params, resolvedKey);
   }
   return undefined;
+}
+
+function hasOwnParamKey(params: Record<string, unknown>, key: string): boolean {
+  try {
+    return Object.hasOwn(params, key);
+  } catch {
+    return false;
+  }
+}
+
+function readParamValue(params: Record<string, unknown>, key: string): unknown {
+  try {
+    return params[key];
+  } catch {
+    return undefined;
+  }
 }
