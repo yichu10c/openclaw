@@ -173,6 +173,54 @@ const QA_BUS_TOOL_CALL_REDACTED = "[redacted]";
 const QA_BUS_TOOL_CALL_SENSITIVE_KEY_RE =
   /authorization|cookie|credential|password|secret|token|api[-_]?key|access[-_]?key|private[-_]?key/iu;
 
+function readQaBusArrayPrefix(value: unknown[], maxLength: number): unknown[] | undefined {
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return undefined;
+  }
+  const limit = Math.min(length, maxLength);
+  const entries: unknown[] = [];
+  for (let index = 0; index < limit; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
+function readQaBusRecordEntries(
+  value: Record<string, unknown>,
+  maxKeys: number,
+): Array<[string, unknown]> | undefined {
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return undefined;
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys.slice(0, maxKeys)) {
+    try {
+      entries.push([key, value[key]]);
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
+function readQaBusRecordField(value: Record<string, unknown>, key: string): unknown {
+  try {
+    return value[key];
+  } catch {
+    return undefined;
+  }
+}
+
 function sanitizeQaBusToolCallValue(value: unknown, depth: number, key?: string): unknown {
   if (key && QA_BUS_TOOL_CALL_SENSITIVE_KEY_RE.test(key)) {
     return QA_BUS_TOOL_CALL_REDACTED;
@@ -194,18 +242,24 @@ function sanitizeQaBusToolCallValue(value: unknown, depth: number, key?: string)
     return "[truncated]";
   }
   if (Array.isArray(value)) {
-    return value.slice(0, QA_BUS_TOOL_CALL_MAX_ARRAY_LENGTH).map((entry) => {
+    const entries = readQaBusArrayPrefix(value, QA_BUS_TOOL_CALL_MAX_ARRAY_LENGTH);
+    if (!entries) {
+      return undefined;
+    }
+    return entries.map((entry) => {
       return sanitizeQaBusToolCallValue(entry, depth + 1);
     });
   }
   if (isRecord(value)) {
+    const entries = readQaBusRecordEntries(value, QA_BUS_TOOL_CALL_MAX_OBJECT_KEYS);
+    if (!entries) {
+      return undefined;
+    }
     return Object.fromEntries(
-      Object.entries(value)
-        .slice(0, QA_BUS_TOOL_CALL_MAX_OBJECT_KEYS)
-        .flatMap(([entryKey, entryValue]) => {
-          const sanitized = sanitizeQaBusToolCallValue(entryValue, depth + 1, entryKey);
-          return sanitized === undefined ? [] : [[entryKey, sanitized]];
-        }),
+      entries.flatMap(([entryKey, entryValue]) => {
+        const sanitized = sanitizeQaBusToolCallValue(entryValue, depth + 1, entryKey);
+        return sanitized === undefined ? [] : [[entryKey, sanitized]];
+      }),
     );
   }
   return undefined;
@@ -225,15 +279,20 @@ export function sanitizeQaBusToolCalls(value: unknown): QaBusToolCall[] | undefi
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const sanitized = value.slice(0, QA_BUS_TOOL_CALL_MAX_COUNT).flatMap((toolCall) => {
+  const toolCalls = readQaBusArrayPrefix(value, QA_BUS_TOOL_CALL_MAX_COUNT);
+  if (!toolCalls) {
+    return undefined;
+  }
+  const sanitized = toolCalls.flatMap((toolCall) => {
     if (!isRecord(toolCall)) {
       return [];
     }
-    const name = typeof toolCall.name === "string" ? toolCall.name.trim() : "";
+    const nameValue = readQaBusRecordField(toolCall, "name");
+    const name = typeof nameValue === "string" ? nameValue.trim() : "";
     if (!name) {
       return [];
     }
-    const args = sanitizeQaBusToolCallArguments(toolCall.arguments);
+    const args = sanitizeQaBusToolCallArguments(readQaBusRecordField(toolCall, "arguments"));
     return [
       {
         name,

@@ -72,4 +72,88 @@ describe("qa-channel protocol", () => {
 
     expect(sanitizeQaBusToolCalls(toolCalls)?.map((toolCall) => toolCall.name)).toHaveLength(50);
   });
+
+  it("bounds hostile QA bus tool-call array and record reads", () => {
+    const nestedValues = ["visible"] as unknown[];
+    Object.defineProperty(nestedValues, "slice", {
+      get() {
+        throw new Error("fuzzplugin nested slice");
+      },
+    });
+    Object.defineProperty(nestedValues, "map", {
+      get() {
+        throw new Error("fuzzplugin nested map");
+      },
+    });
+
+    const toolCalls = [
+      new Proxy(
+        {},
+        {
+          get(_target, property) {
+            if (property === "name") {
+              throw new Error("fuzzplugin name getter");
+            }
+            return undefined;
+          },
+        },
+      ),
+      {
+        name: " mockplugin.unreadable ",
+        arguments: new Proxy(
+          { token: "secret" },
+          {
+            ownKeys() {
+              throw new Error("fuzzplugin ownKeys");
+            },
+          },
+        ),
+      },
+      {
+        name: " fuzzplugin.lookup ",
+        arguments: {
+          values: nestedValues,
+          nested: new Proxy(
+            {
+              ok: "yes",
+              secretToken: "secret",
+            },
+            {
+              get(target, property, receiver) {
+                if (property === "ok") {
+                  throw new Error("fuzzplugin nested getter");
+                }
+                return Reflect.get(target, property, receiver);
+              },
+            },
+          ),
+        },
+      },
+    ] as unknown[];
+    Object.defineProperty(toolCalls, "slice", {
+      get() {
+        throw new Error("fuzzplugin top-level slice");
+      },
+    });
+    Object.defineProperty(toolCalls, "flatMap", {
+      get() {
+        throw new Error("fuzzplugin top-level flatMap");
+      },
+    });
+
+    expect(sanitizeQaBusToolCalls(toolCalls)).toEqual([
+      {
+        name: "mockplugin.unreadable",
+      },
+      {
+        name: "fuzzplugin.lookup",
+        arguments: {
+          values: ["[redacted]"],
+          nested: {
+            secretToken: "[redacted]",
+          },
+        },
+      },
+    ]);
+  });
 });
