@@ -257,6 +257,93 @@ describe("Codex plugin activation", () => {
     expect(appCache.getRevision()).toBeGreaterThan(0);
   });
 
+  it("fails closed when plugin install auth apps are unreadable", async () => {
+    const result = await ensureCodexPluginActivation({
+      identity: identity("fuzzplugin"),
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("fuzzplugin", { installed: false, enabled: false })]);
+        }
+        if (method === "plugin/install") {
+          return {
+            authPolicy: "ON_USE",
+            get appsNeedingAuth() {
+              throw new Error("fuzzplugin auth apps read failed");
+            },
+          };
+        }
+        if (method === "skills/list") {
+          return { data: [] } satisfies v2.SkillsListResponse;
+        }
+        if (method === "hooks/list") {
+          return { data: [] } satisfies v2.HooksListResponse;
+        }
+        if (method === "config/mcpServer/reload") {
+          return {};
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expectActivationResult(result, {
+      ok: false,
+      reason: "auth_required",
+      installAttempted: true,
+    });
+    expect(result.installResponse).toEqual({ authPolicy: "ON_USE", appsNeedingAuth: [] });
+    expect(result.diagnostics).toEqual([
+      {
+        message:
+          "Codex plugin install auth app summary unavailable; app exposure remains disabled.",
+      },
+    ]);
+  });
+
+  it("uses stable auth app names when plugin install auth app fields are unreadable", async () => {
+    const result = await ensureCodexPluginActivation({
+      identity: identity("fuzzplugin"),
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("fuzzplugin", { installed: false, enabled: false })]);
+        }
+        if (method === "plugin/install") {
+          return {
+            authPolicy: "ON_USE",
+            appsNeedingAuth: [
+              {
+                id: "mockplugin-calendar",
+                get name() {
+                  throw new Error("mockplugin app name read failed");
+                },
+              },
+            ],
+          };
+        }
+        if (method === "skills/list") {
+          return { data: [] } satisfies v2.SkillsListResponse;
+        }
+        if (method === "hooks/list") {
+          return { data: [] } satisfies v2.HooksListResponse;
+        }
+        if (method === "config/mcpServer/reload") {
+          return {};
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expectActivationResult(result, {
+      ok: false,
+      reason: "auth_required",
+      installAttempted: true,
+    });
+    expect(result.diagnostics).toEqual([
+      {
+        message: "mockplugin-calendar requires app authentication before plugin tools are exposed.",
+      },
+    ]);
+  });
+
   it("reports post-install runtime refresh failures without hiding the install attempt", async () => {
     const result = await ensureCodexPluginActivation({
       identity: identity("google-calendar"),

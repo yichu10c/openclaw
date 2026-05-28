@@ -100,13 +100,15 @@ export async function ensureCodexPluginActivation(
     };
   }
 
-  const installResponse = (await params.request(
-    "plugin/install",
-    pluginReadParams(
-      resolved.marketplace,
-      params.identity.pluginName,
-    ) satisfies v2.PluginInstallParams,
-  )) as v2.PluginInstallResponse;
+  const installResponse = normalizePluginInstallResponse(
+    await params.request(
+      "plugin/install",
+      pluginReadParams(
+        resolved.marketplace,
+        params.identity.pluginName,
+      ) satisfies v2.PluginInstallParams,
+    ),
+  );
   const refreshDiagnostics: CodexPluginActivationDiagnostic[] = [];
   let refreshFailed = false;
   try {
@@ -124,7 +126,8 @@ export async function ensureCodexPluginActivation(
       }`,
     });
   }
-  const authRequired = installResponse.appsNeedingAuth.length > 0;
+  const authRequired =
+    installResponse.response.appsNeedingAuth.length > 0 || installResponse.authSummaryUnavailable;
   return {
     identity: params.identity,
     ok: !authRequired && !refreshFailed,
@@ -137,10 +140,18 @@ export async function ensureCodexPluginActivation(
           : "installed",
     installAttempted: true,
     marketplace: resolved.marketplace,
-    installResponse,
+    installResponse: installResponse.response,
     diagnostics: [
       ...refreshDiagnostics,
-      ...installResponse.appsNeedingAuth.map((app) => ({
+      ...(installResponse.authSummaryUnavailable
+        ? [
+            {
+              message:
+                "Codex plugin install auth app summary unavailable; app exposure remains disabled.",
+            },
+          ]
+        : []),
+      ...installResponse.response.appsNeedingAuth.map((app) => ({
         message: `${app.name} requires app authentication before plugin tools are exposed.`,
       })),
     ],
@@ -290,6 +301,80 @@ function activationFailure(
 
 function isEnoent(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+function normalizePluginInstallResponse(value: unknown): {
+  response: v2.PluginInstallResponse;
+  authSummaryUnavailable: boolean;
+} {
+  const record = asRecord(value);
+  if (!record) {
+    return {
+      response: { authPolicy: "UNKNOWN", appsNeedingAuth: [] },
+      authSummaryUnavailable: true,
+    };
+  }
+  const apps = readInstallAuthApps(record);
+  return {
+    response: {
+      authPolicy: readString(record, "authPolicy") ?? "UNKNOWN",
+      appsNeedingAuth: apps.entries,
+    },
+    authSummaryUnavailable: apps.unreadable,
+  };
+}
+
+function readInstallAuthApps(record: Record<string, unknown>): {
+  entries: v2.AppSummary[];
+  unreadable: boolean;
+} {
+  try {
+    const value = record.appsNeedingAuth;
+    if (!Array.isArray(value)) {
+      return { entries: [], unreadable: true };
+    }
+    let unreadable = false;
+    const entries = value.flatMap((entry) => {
+      const app = asRecord(entry);
+      if (!app) {
+        unreadable = true;
+        return [];
+      }
+      const id = readString(app, "id");
+      const name = readString(app, "name") ?? id;
+      if (!id || !name) {
+        unreadable = true;
+        return [];
+      }
+      return [
+        {
+          id,
+          name,
+          description: readString(app, "description") ?? null,
+          installUrl: readString(app, "installUrl") ?? null,
+          needsAuth: true,
+        },
+      ];
+    });
+    return { entries, unreadable };
+  } catch {
+    return { entries: [], unreadable: true };
+  }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readString(record: Record<string, unknown>, key: string): string | undefined {
+  try {
+    const value = record[key];
+    return typeof value === "string" && value.trim() ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function escapeRegExp(value: string): string {
