@@ -17,6 +17,48 @@ export type BundleServerRuntimeSupport = {
   diagnostics: string[];
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function copyServerEntries(
+  value: unknown,
+  diagnostics: string[],
+): Array<[serverName: string, server: unknown]> {
+  if (!isRecord(value)) {
+    return [];
+  }
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    diagnostics.push("unable to inspect bundle server map");
+    return [];
+  }
+  const entries: Array<[serverName: string, server: unknown]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, value[key]]);
+    } catch {
+      diagnostics.push(`unable to inspect bundle server ${key}`);
+      entries.push([key, undefined]);
+    }
+  }
+  return entries;
+}
+
+function readServerCommand(server: unknown, serverName: string, diagnostics: string[]): unknown {
+  if (!isRecord(server)) {
+    return undefined;
+  }
+  try {
+    return server.command;
+  } catch {
+    diagnostics.push(`unable to inspect bundle server ${serverName} command`);
+    return undefined;
+  }
+}
+
 export function readBundleJsonObject(params: {
   rootDir: string;
   relativePath: string;
@@ -62,9 +104,18 @@ export function inspectBundleServerRuntimeSupport<TConfig>(params: {
 }): BundleServerRuntimeSupport {
   const supportedServerNames: string[] = [];
   const unsupportedServerNames: string[] = [];
+  const diagnostics = [...params.loaded.diagnostics];
   let hasSupportedServer = false;
-  for (const [serverName, server] of Object.entries(params.resolveServers(params.loaded.config))) {
-    if (typeof server.command === "string" && server.command.trim().length > 0) {
+  let servers: unknown;
+  try {
+    servers = params.resolveServers(params.loaded.config);
+  } catch {
+    diagnostics.push("unable to inspect bundle server map");
+    servers = {};
+  }
+  for (const [serverName, server] of copyServerEntries(servers, diagnostics)) {
+    const command = readServerCommand(server, serverName, diagnostics);
+    if (typeof command === "string" && command.trim().length > 0) {
       hasSupportedServer = true;
       supportedServerNames.push(serverName);
       continue;
@@ -75,7 +126,7 @@ export function inspectBundleServerRuntimeSupport<TConfig>(params: {
     hasSupportedServer,
     supportedServerNames,
     unsupportedServerNames,
-    diagnostics: params.loaded.diagnostics,
+    diagnostics,
   };
 }
 
