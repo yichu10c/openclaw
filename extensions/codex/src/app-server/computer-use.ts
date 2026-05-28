@@ -8,7 +8,6 @@ import {
   type ResolvedCodexComputerUseConfig,
 } from "./config.js";
 import type {
-  CodexListMcpServerStatusResponse,
   CodexMcpServerStatus,
   CodexPluginDetail,
   CodexPluginReadResponse,
@@ -544,18 +543,39 @@ async function readMcpServerStatus(
 ): Promise<CodexMcpServerStatus | undefined> {
   let cursor: string | null | undefined;
   do {
-    const response = await request<CodexListMcpServerStatusResponse>("mcpServerStatus/list", {
+    const response = await request<unknown>("mcpServerStatus/list", {
       cursor,
       limit: 100,
       detail: "toolsAndAuthOnly",
     } satisfies CodexRequestObject);
-    const found = response.data.find((server) => server.name === serverName);
+    const found = readArrayField(response, "data")
+      .map((server) => normalizeMcpServerStatus(server, serverName))
+      .find((server) => server !== undefined);
     if (found) {
       return found;
     }
-    cursor = response.nextCursor;
+    const responseRecord = asRecord(response);
+    cursor = responseRecord ? readStringField(responseRecord, "nextCursor") : undefined;
   } while (cursor);
   return undefined;
+}
+
+function normalizeMcpServerStatus(
+  value: unknown,
+  serverName: string,
+): CodexMcpServerStatus | undefined {
+  const server = asRecord(value);
+  if (!server || readStringField(server, "name") !== serverName) {
+    return undefined;
+  }
+  const tools = readRecordField(server, "tools");
+  if (!tools) {
+    return undefined;
+  }
+  return {
+    name: serverName,
+    tools: tools as CodexMcpServerStatus["tools"],
+  };
 }
 
 async function reloadMcpServers(request: CodexComputerUseRequest): Promise<void> {
@@ -725,6 +745,17 @@ function readStringField(record: Record<string, unknown>, key: string): string |
   try {
     const value = record[key];
     return typeof value === "string" && value.trim() ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readRecordField(
+  record: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
+  try {
+    return asRecord(record[key]);
   } catch {
     return undefined;
   }

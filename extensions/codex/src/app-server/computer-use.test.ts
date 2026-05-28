@@ -309,6 +309,32 @@ describe("Codex Computer Use setup", () => {
     });
   });
 
+  it("fails closed when Computer Use MCP server tools are unreadable after install", async () => {
+    const request = createComputerUseRequest({
+      installed: false,
+      unreadableMcpTools: true,
+    });
+
+    await expectSetupErrorStatus(
+      installCodexComputerUse({
+        pluginConfig: { computerUse: { marketplaceName: "desktop-tools" } },
+        request,
+      }),
+      {
+        ready: false,
+        reason: "mcp_missing",
+        installed: true,
+        pluginEnabled: true,
+        mcpServerAvailable: false,
+        message: "Computer Use is installed, but the computer-use MCP server is not available.",
+      },
+    );
+    expect(request).toHaveBeenCalledWith("plugin/install", {
+      marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+      pluginName: "computer-use",
+    });
+  });
+
   it("auto-registers the bundled Codex app marketplace during auto-install", async () => {
     const bundledMarketplacePath = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-codex-bundled-marketplace-"),
@@ -485,6 +511,7 @@ function createComputerUseRequest(params: {
   installed: boolean;
   enabled?: boolean;
   marketplaceAvailableAfterListCalls?: number;
+  unreadableMcpTools?: boolean;
 }): CodexComputerUseRequest {
   let installed = params.installed;
   let enabled = params.enabled ?? installed;
@@ -542,24 +569,28 @@ function createComputerUseRequest(params: {
       return undefined;
     }
     if (method === "mcpServerStatus/list") {
+      const server = {
+        name: "computer-use",
+        resources: [],
+        resourceTemplates: [],
+        authStatus: "unsupported",
+      } as Record<string, unknown>;
+      if (params.unreadableMcpTools) {
+        Object.defineProperty(server, "tools", {
+          get() {
+            throw new Error("fuzzplugin computer-use tools read failed");
+          },
+        });
+      } else {
+        server.tools = {
+          list_apps: {
+            name: "list_apps",
+            inputSchema: { type: "object" },
+          },
+        };
+      }
       return {
-        data:
-          installed && enabled
-            ? [
-                {
-                  name: "computer-use",
-                  tools: {
-                    list_apps: {
-                      name: "list_apps",
-                      inputSchema: { type: "object" },
-                    },
-                  },
-                  resources: [],
-                  resourceTemplates: [],
-                  authStatus: "unsupported",
-                },
-              ]
-            : [],
+        data: installed && enabled ? [server] : [],
         nextCursor: null,
       };
     }
