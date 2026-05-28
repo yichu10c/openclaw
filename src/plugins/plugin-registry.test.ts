@@ -12,6 +12,7 @@ import {
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { loadPluginLookUpTable } from "./plugin-lookup-table.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
@@ -160,6 +161,17 @@ function createPersistableIndex(pluginId: string): InstalledPluginIndex {
     ...index,
     plugins,
   };
+}
+
+function createUnreadableArrayLength<T>(entries: T[], message: string): T[] {
+  return new Proxy(entries, {
+    get(target, prop, receiver) {
+      if (prop === "length") {
+        throw new Error(message);
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -490,6 +502,45 @@ describe("plugin registry facade", () => {
     );
     expect(normalizedConfig.allow).toEqual(["openai"]);
     expect(normalizedConfig.entries?.openai?.enabled).toBe(false);
+  });
+
+  it("skips unreadable synthetic manifest alias lists while normalizing plugin ids", () => {
+    const fuzzIndexRecord = createIndex("fuzzplugin").plugins[0];
+    const mockIndexRecord = createIndex("mockplugin").plugins[0];
+    const index = createIndex("fuzzplugin", {
+      plugins: [
+        fuzzIndexRecord,
+        {
+          ...mockIndexRecord,
+          pluginId: "mockplugin",
+        },
+      ],
+    });
+    const manifestRegistry = {
+      plugins: [
+        {
+          id: "fuzzplugin",
+          channels: createUnreadableArrayLength(
+            ["fuzzchannel"],
+            "fuzzplugin manifest channels length failed",
+          ),
+          providers: [],
+          cliBackends: [],
+        },
+        {
+          id: "mockplugin",
+          channels: ["mockchannel"],
+          providers: [],
+          cliBackends: [],
+        },
+      ],
+      diagnostics: [],
+    } as unknown as PluginManifestRegistry;
+
+    const normalizePluginId = createPluginRegistryIdNormalizer(index, { manifestRegistry });
+
+    expect(normalizePluginId("mockchannel")).toBe("mockplugin");
+    expect(normalizePluginId("fuzzchannel")).toBe("fuzzchannel");
   });
 
   it("normalizes plugin config ids from a provided manifest registry without rereading manifests", () => {

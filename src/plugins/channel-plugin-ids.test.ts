@@ -672,6 +672,17 @@ function createStartupConfig(params: {
   } as OpenClawConfig;
 }
 
+function createUnreadableArrayLength<T>(entries: T[], message: string): T[] {
+  return new Proxy(entries, {
+    get(target, prop, receiver) {
+      if (prop === "length") {
+        throw new Error(message);
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  });
+}
+
 describe("resolveGatewayStartupPluginIds", () => {
   beforeEach(() => {
     listPotentialConfiguredChannelIds.mockReset().mockImplementation((config: OpenClawConfig) => {
@@ -701,6 +712,46 @@ describe("resolveGatewayStartupPluginIds", () => {
     loadPluginManifestRegistryForPluginRegistry
       .mockReset()
       .mockImplementation(() => loadPluginManifestRegistry());
+  });
+
+  it("skips unreadable synthetic manifest channel lists during gateway startup planning", () => {
+    const registry: PluginManifestRegistry = {
+      plugins: [
+        withManifestLoadPaths({
+          id: "fuzzplugin",
+          channels: createUnreadableArrayLength(
+            ["fuzzchannel"],
+            "fuzzplugin manifest channels length failed",
+          ),
+          origin: "global",
+          enabledByDefault: undefined,
+          providers: [],
+          cliBackends: [],
+        }),
+        withManifestLoadPaths({
+          id: "mockplugin",
+          channels: ["mockchannel"],
+          origin: "bundled",
+          enabledByDefault: undefined,
+          providers: [],
+          cliBackends: [],
+        }),
+      ],
+      diagnostics: [],
+    };
+
+    expect(
+      resolveGatewayStartupPluginPlanFromRegistry({
+        config: { channels: { mockchannel: { token: "configured" } } } as OpenClawConfig,
+        env: createPluginPlanningTestEnv(),
+        index: createInstalledPluginIndexFixture(registry),
+        manifestRegistry: registry,
+      }),
+    ).toEqual({
+      channelPluginIds: ["mockplugin"],
+      configuredDeferredChannelPluginIds: [],
+      pluginIds: ["mockplugin"],
+    });
   });
 
   it.each([

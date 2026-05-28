@@ -109,6 +109,38 @@ function copyRecordKeys(value: unknown): string[] {
   }
 }
 
+function copyStringArrayEntries(value: unknown): string[] {
+  return (copyArrayEntries(value) ?? []).filter(
+    (entry): entry is string => typeof entry === "string",
+  );
+}
+
+function copyManifestRecords(manifestRegistry: PluginManifestRegistry): PluginManifestRecord[] {
+  return (copyArrayEntries(readRecordValue(manifestRegistry, "plugins")) ?? []).filter(
+    (entry): entry is PluginManifestRecord => isRecord(entry),
+  );
+}
+
+function readManifestId(manifest: unknown): string | undefined {
+  const id = readRecordValue(manifest, "id");
+  return typeof id === "string" ? id : undefined;
+}
+
+function readManifestStringList(manifest: unknown, key: string): string[] {
+  return copyStringArrayEntries(readRecordValue(manifest, key));
+}
+
+function readManifestActivationValue(manifest: unknown, key: string): unknown {
+  return readRecordValue(readRecordValue(manifest, "activation"), key);
+}
+
+function readManifestContractIds(
+  manifest: PluginManifestRecord | undefined,
+  key: GenerationProviderContractKey | "speechProviders" | "webSearchProviders",
+): string[] {
+  return copyStringArrayEntries(readRecordValue(readRecordValue(manifest, "contracts"), key));
+}
+
 function isConfigActivationValueEnabled(value: unknown): boolean {
   if (value === false) {
     return false;
@@ -206,7 +238,7 @@ function shouldConsiderForGatewayStartup(params: {
   memorySlotStartupPluginId?: string;
   contextEngineSlotStartupPluginId?: string;
 }): boolean {
-  if (params.manifest?.activation?.onStartup === true) {
+  if (readManifestActivationValue(params.manifest, "onStartup") === true) {
     return true;
   }
   if (params.contextEngineSlotStartupPluginId === params.plugin.pluginId) {
@@ -236,14 +268,18 @@ type ManifestRegistryLookup = ReadonlyMap<string, PluginManifestRecord>;
 function createManifestRegistryLookup(
   manifestRegistry: PluginManifestRegistry,
 ): ManifestRegistryLookup {
-  return new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
+  const entries = copyManifestRecords(manifestRegistry).flatMap((plugin) => {
+    const id = readManifestId(plugin);
+    return id ? [[id, plugin] as const] : [];
+  });
+  return new Map(entries);
 }
 
 function listManifestChannelIds(
   manifestLookup: ManifestRegistryLookup,
   pluginId: string,
 ): readonly string[] {
-  return manifestLookup.get(pluginId)?.channels ?? [];
+  return readManifestStringList(manifestLookup.get(pluginId), "channels");
 }
 
 function findManifestPlugin(
@@ -257,8 +293,10 @@ function hasConfiguredActivationPath(params: {
   manifest: PluginManifestRecord | undefined;
   config: OpenClawConfig;
 }): boolean {
-  const paths = params.manifest?.activation?.onConfigPaths;
-  if (!paths?.length) {
+  const paths = copyStringArrayEntries(
+    readManifestActivationValue(params.manifest, "onConfigPaths"),
+  );
+  if (paths.length === 0) {
     return false;
   }
   return paths.some((pathPattern) =>
@@ -276,7 +314,7 @@ function manifestOwnsConfiguredSpeechProvider(params: {
   if (params.configuredSpeechProviderIds.size === 0) {
     return false;
   }
-  return (params.manifest?.contracts?.speechProviders ?? []).some((providerId) => {
+  return readManifestContractIds(params.manifest, "speechProviders").some((providerId) => {
     const normalized = normalizeConfiguredSpeechProviderIdForStartup(providerId);
     return normalized ? params.configuredSpeechProviderIds.has(normalized) : false;
   });
@@ -305,7 +343,7 @@ function manifestOwnsConfiguredWebSearchProvider(params: {
   if (params.configuredWebSearchProviderIds.size === 0) {
     return false;
   }
-  return (params.manifest?.contracts?.webSearchProviders ?? []).some((providerId) => {
+  return readManifestContractIds(params.manifest, "webSearchProviders").some((providerId) => {
     const normalized = normalizeOptionalLowercaseString(providerId);
     return normalized ? params.configuredWebSearchProviderIds.has(normalized) : false;
   });
@@ -375,7 +413,9 @@ function buildManifestModelProviderLookup(
   return {
     modelApis,
     providerIds: new Set(
-      manifestRegistry.plugins.flatMap((plugin) => plugin.providers.map(normalizeProviderId)),
+      copyManifestRecords(manifestRegistry).flatMap((plugin) =>
+        readManifestStringList(plugin, "providers").map(normalizeProviderId),
+      ),
     ),
   };
 }
@@ -464,7 +504,7 @@ function manifestOwnsConfiguredModelProvider(params: {
   if (params.configuredModelProviderIds.size === 0) {
     return false;
   }
-  return (params.manifest?.providers ?? []).some((providerId) => {
+  return readManifestStringList(params.manifest, "providers").some((providerId) => {
     return params.configuredModelProviderIds.has(normalizeProviderId(providerId));
   });
 }
@@ -509,7 +549,7 @@ function manifestOwnsConfiguredGenerationProvider(params: {
       continue;
     }
     if (
-      (params.manifest?.contracts?.[contractKey] ?? []).some((providerId) => {
+      readManifestContractIds(params.manifest, contractKey).some((providerId) => {
         const normalized = normalizeOptionalLowercaseString(providerId);
         return normalized ? configuredProviderIds.has(normalized) : false;
       })
@@ -887,7 +927,11 @@ function hasHookRuntimeStartupIntent(params: {
   manifest: PluginManifestRecord | undefined;
   activationSourcePlugins: NormalizedPluginsConfig;
 }): boolean {
-  if (params.manifest?.activation?.onCapabilities?.includes("hook")) {
+  if (
+    copyStringArrayEntries(readManifestActivationValue(params.manifest, "onCapabilities")).includes(
+      "hook",
+    )
+  ) {
     return true;
   }
   return hasExplicitHookPolicyConfig(
@@ -1006,9 +1050,13 @@ export function resolveChannelPluginIdsFromRegistry(params: {
   manifestRegistry: PluginManifestRegistry;
 }): string[] {
   const { manifestRegistry } = params;
-  return manifestRegistry.plugins
-    .filter((plugin) => plugin.channels.length > 0)
-    .map((plugin) => plugin.id);
+  return copyManifestRecords(manifestRegistry).flatMap((plugin) => {
+    const id = readManifestId(plugin);
+    if (!id || readManifestStringList(plugin, "channels").length === 0) {
+      return [];
+    }
+    return [id];
+  });
 }
 
 export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
