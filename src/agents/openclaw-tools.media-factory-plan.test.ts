@@ -518,6 +518,65 @@ describe("optional media tool factory planning", () => {
     ).toBe(true);
   });
 
+  it("skips unreadable manifest capability aliases while preserving canonical provider env availability", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      createPlugin({
+        id: "fuzzplugin",
+        contracts: { imageGenerationProviders: ["mockplugin"] },
+        setupProviders: [{ id: "mockplugin", envVars: ["MOCKPLUGIN_API_KEY"] }],
+        imageGenerationProviderMetadata: {
+          mockplugin: {
+            aliases: new Proxy([], {
+              get(target, key, receiver) {
+                if (key === Symbol.iterator) {
+                  throw new Error("fuzzplugin image alias iterator failed");
+                }
+                return Reflect.get(target, key, receiver);
+              },
+            }) as never,
+          },
+        },
+      }),
+    ]);
+    vi.stubEnv("MOCKPLUGIN_API_KEY", "mock-key");
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+      }).imageGenerate,
+    ).toBe(true);
+  });
+
+  it("ignores unreadable configured vision provider maps on the media factory path", () => {
+    const config = {
+      models: {
+        providers: new Proxy(
+          {},
+          {
+            ownKeys() {
+              throw new Error("fuzzplugin model provider keys failed");
+            },
+          },
+        ),
+      },
+    } as OpenClawConfig;
+    installSnapshot(config, []);
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+      }),
+    ).toEqual({
+      imageGenerate: false,
+      videoGenerate: false,
+      musicGenerate: false,
+      pdf: false,
+    });
+  });
+
   it("defers PDF model resolution from the tool-prep hot path", async () => {
     const config: OpenClawConfig = {};
     installSnapshot(config, []);

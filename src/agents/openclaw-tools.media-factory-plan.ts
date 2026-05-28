@@ -5,6 +5,7 @@ import {
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -53,6 +54,57 @@ function hasExplicitPdfModelConfig(config: OpenClawConfig | undefined): boolean 
     hasExplicitToolModelConfig(config?.agents?.defaults?.pdfModel) ||
     hasExplicitImageModelConfig(config)
   );
+}
+
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function copyRecordEntries(value: unknown): Array<[string, unknown]> {
+  if (!isRecord(value)) {
+    return [];
+  }
+  let keys: string[] = [];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return [];
+  }
+  return keys.flatMap((key) => {
+    try {
+      return [[key, value[key]]];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function copyArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length = 0;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      // Skip unreadable model metadata entries; other providers can still prove availability.
+    }
+  }
+  return entries;
 }
 
 function isToolAllowedByFactoryPolicy(params: {
@@ -136,14 +188,10 @@ function hasConfiguredVisionModelAuthSignal(params: {
   snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
   authStore?: AuthProfileStore;
 }): boolean {
-  const providers = params.config?.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return false;
-  }
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
+  for (const [providerId, providerConfig] of copyRecordEntries(params.config?.models?.providers)) {
     if (
-      !providerConfig?.models?.some(
-        (model) => Array.isArray(model?.input) && model.input.includes("image"),
+      !copyArrayEntries(readRecordValue(providerConfig, "models")).some((model) =>
+        copyArrayEntries(readRecordValue(model, "input")).includes("image"),
       )
     ) {
       continue;
