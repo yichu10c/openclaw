@@ -7,6 +7,7 @@ import {
 } from "../shared/string-coerce.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
+  createPluginCacheKey,
   PluginLruCache,
   resolveConfigScopedRuntimeCacheValue,
   type ConfigScopedRuntimeCache,
@@ -32,9 +33,6 @@ import type {
 let providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
 const defaultProviderRuntimePluginCache = new PluginLruCache<ProviderPlugin | null>(128);
 const PREPARED_PROVIDER_RUNTIME_SURFACES = ["channel"] as const;
-const PROVIDER_RUNTIME_CACHE_UNREADABLE_VALUE = "[Unreadable]";
-const PROVIDER_RUNTIME_CACHE_UNREADABLE_OBJECT = "[UnreadableObject]";
-const PROVIDER_RUNTIME_CACHE_CIRCULAR_VALUE = "[Circular]";
 
 export type ProviderRuntimePluginLookupParams = {
   provider: string;
@@ -76,82 +74,24 @@ function resolveProviderRuntimePluginCacheKey(
   params: ProviderRuntimePluginLookupParams,
   registryState = getPluginRegistryState(),
 ): string {
-  return stableProviderRuntimeCacheValueKey({
-    provider: normalizeLowercaseStringOrEmpty(params.provider),
-    modelId: resolveProviderRuntimeLookupModelId(params) ?? null,
-    pluginControlPlane: resolvePluginControlPlaneFingerprint({
-      config: params.config,
-      env: params.env,
-      workspaceDir: params.workspaceDir,
-    }),
-    plugins: params.config?.plugins,
-    models: params.config?.models?.providers,
-    workspaceDir: params.workspaceDir ?? "",
-    applyAutoEnable: params.applyAutoEnable ?? null,
-    bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
-    pluginRegistryKey: registryState?.key ?? null,
-    pluginRegistryVersion: registryState?.activeVersion ?? null,
-  });
-}
-
-function stableProviderRuntimeCacheValueKey(value: unknown, stack = new WeakSet<object>()): string {
-  if (value === null) {
-    return "null";
-  }
-  if (typeof value === "string") {
-    return `string:${JSON.stringify(value)}`;
-  }
-  if (typeof value === "boolean") {
-    return `boolean:${JSON.stringify(value)}`;
-  }
-  if (typeof value === "number") {
-    return `number:${JSON.stringify(Number.isFinite(value) ? value : String(value))}`;
-  }
-  if (typeof value === "bigint") {
-    return `bigint:${JSON.stringify(value.toString())}`;
-  }
-  if (typeof value !== "object") {
-    return `${typeof value}:${JSON.stringify(`[${typeof value}]`)}`;
-  }
-  if (stack.has(value)) {
-    return `circular:${JSON.stringify(PROVIDER_RUNTIME_CACHE_CIRCULAR_VALUE)}`;
-  }
-  stack.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const fields: string[] = [];
-      for (let index = 0; index < value.length; index++) {
-        try {
-          fields.push(stableProviderRuntimeCacheValueKey(value[index], stack));
-        } catch {
-          fields.push(`unreadable:${JSON.stringify(PROVIDER_RUNTIME_CACHE_UNREADABLE_VALUE)}`);
-        }
-      }
-      return `array:[${fields.join(",")}]`;
-    }
-    const record = value as Record<string, unknown>;
-    let keys: string[];
-    try {
-      keys = Object.keys(record).toSorted();
-    } catch {
-      return `unreadable-object:${JSON.stringify(PROVIDER_RUNTIME_CACHE_UNREADABLE_OBJECT)}`;
-    }
-    const fields: string[] = [];
-    for (const key of keys) {
-      try {
-        fields.push(
-          `${JSON.stringify(key)}:${stableProviderRuntimeCacheValueKey(record[key], stack)}`,
-        );
-      } catch {
-        fields.push(
-          `${JSON.stringify(key)}:unreadable:${JSON.stringify(PROVIDER_RUNTIME_CACHE_UNREADABLE_VALUE)}`,
-        );
-      }
-    }
-    return `object:{${fields.join(",")}}`;
-  } finally {
-    stack.delete(value);
-  }
+  return createPluginCacheKey([
+    {
+      provider: normalizeLowercaseStringOrEmpty(params.provider),
+      modelId: resolveProviderRuntimeLookupModelId(params) ?? null,
+      pluginControlPlane: resolvePluginControlPlaneFingerprint({
+        config: params.config,
+        env: params.env,
+        workspaceDir: params.workspaceDir,
+      }),
+      plugins: params.config?.plugins,
+      models: params.config?.models?.providers,
+      workspaceDir: params.workspaceDir ?? "",
+      applyAutoEnable: params.applyAutoEnable ?? null,
+      bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
+      pluginRegistryKey: registryState?.key ?? null,
+      pluginRegistryVersion: registryState?.activeVersion ?? null,
+    },
+  ]);
 }
 
 function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string): boolean {

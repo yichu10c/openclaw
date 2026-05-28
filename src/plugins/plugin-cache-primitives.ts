@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+const PLUGIN_CACHE_UNREADABLE_VALUE = "[Unreadable]";
+const PLUGIN_CACHE_UNREADABLE_OBJECT = "[UnreadableObject]";
+const PLUGIN_CACHE_CIRCULAR_VALUE = "[Circular]";
+
 export type PluginLruCacheResult<T> = { hit: true; value: T } | { hit: false };
 
 export class PluginLruCache<T> {
@@ -96,7 +100,79 @@ export function resolveConfigScopedRuntimeCacheValue<T>(params: {
 }
 
 export function createPluginCacheKey(parts: readonly unknown[]): string {
-  return JSON.stringify(parts);
+  return stablePluginCacheValueKey(parts);
+}
+
+function stablePluginCacheValueKey(value: unknown, stack = new WeakSet<object>()): string {
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return `string:${JSON.stringify(value)}`;
+  }
+  if (typeof value === "boolean") {
+    return `boolean:${JSON.stringify(value)}`;
+  }
+  if (typeof value === "number") {
+    return `number:${JSON.stringify(Number.isFinite(value) ? value : String(value))}`;
+  }
+  if (typeof value === "bigint") {
+    return `bigint:${JSON.stringify(value.toString())}`;
+  }
+  if (typeof value !== "object") {
+    return `${typeof value}:${JSON.stringify(`[${typeof value}]`)}`;
+  }
+  if (stack.has(value)) {
+    return `circular:${JSON.stringify(PLUGIN_CACHE_CIRCULAR_VALUE)}`;
+  }
+  stack.add(value);
+  try {
+    const jsonValue = readPluginCacheJsonValue(value);
+    if (jsonValue.ok && jsonValue.value !== value) {
+      return `toJSON:${stablePluginCacheValueKey(jsonValue.value, stack)}`;
+    }
+    if (Array.isArray(value)) {
+      const fields: string[] = [];
+      for (let index = 0; index < value.length; index++) {
+        try {
+          fields.push(stablePluginCacheValueKey(value[index], stack));
+        } catch {
+          fields.push(`unreadable:${JSON.stringify(PLUGIN_CACHE_UNREADABLE_VALUE)}`);
+        }
+      }
+      return `array:[${fields.join(",")}]`;
+    }
+    const record = value as Record<string, unknown>;
+    let keys: string[];
+    try {
+      keys = Object.keys(record).toSorted();
+    } catch {
+      return `unreadable-object:${JSON.stringify(PLUGIN_CACHE_UNREADABLE_OBJECT)}`;
+    }
+    const fields: string[] = [];
+    for (const key of keys) {
+      try {
+        fields.push(`${JSON.stringify(key)}:${stablePluginCacheValueKey(record[key], stack)}`);
+      } catch {
+        fields.push(
+          `${JSON.stringify(key)}:unreadable:${JSON.stringify(PLUGIN_CACHE_UNREADABLE_VALUE)}`,
+        );
+      }
+    }
+    return `object:{${fields.join(",")}}`;
+  } finally {
+    stack.delete(value);
+  }
+}
+
+function readPluginCacheJsonValue(value: object): { ok: true; value: unknown } | { ok: false } {
+  if (value instanceof Date) {
+    return { ok: true, value: value.toJSON() };
+  }
+  if (value instanceof URL) {
+    return { ok: true, value: value.toJSON() };
+  }
+  return { ok: false };
 }
 
 export function createConfigScopedPromiseLoader<T>(

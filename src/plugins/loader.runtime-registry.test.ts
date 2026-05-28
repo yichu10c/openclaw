@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCompactionProvider, registerCompactionProvider } from "./compaction-provider.js";
 import { getEmbeddingProvider, registerEmbeddingProvider } from "./embedding-providers.js";
 import {
@@ -307,6 +308,70 @@ describe("getCompatibleActivePluginRegistry", () => {
     expect(cacheKey).not.toContain("secret-token");
     expect(cacheKey).not.toContain("botToken");
     expect(cacheKey).not.toContain("telegram configured");
+  });
+
+  it("tolerates non-json plugin config metadata when building compatibility cache keys", () => {
+    const fuzzMoveConfig: Record<string, unknown> = {
+      route: "1",
+    };
+    fuzzMoveConfig.self = fuzzMoveConfig;
+    Object.defineProperty(fuzzMoveConfig, "unreadable", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin config should stay bounded");
+      },
+    });
+    const config = {
+      plugins: {
+        entries: {
+          fuzzplugin: {
+            enabled: true,
+            config: fuzzMoveConfig,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const stringKey = testing.resolvePluginLoadCacheContext({ config }).cacheKey;
+    fuzzMoveConfig.route = 1n;
+    const bigintKey = testing.resolvePluginLoadCacheContext({ config }).cacheKey;
+    fuzzMoveConfig.route = new Date("2026-05-28T00:00:00.000Z");
+    const dateKey = testing.resolvePluginLoadCacheContext({ config }).cacheKey;
+    fuzzMoveConfig.route = new URL("https://example.com/fuzzplugin");
+    const urlKey = testing.resolvePluginLoadCacheContext({ config }).cacheKey;
+    fuzzMoveConfig.route = {
+      endpoint: "https://one.example",
+      toJSON() {
+        throw new Error("fuzzplugin toJSON should fall back to readable fields");
+      },
+    };
+    const firstThrowingJsonKey = testing.resolvePluginLoadCacheContext({ config }).cacheKey;
+    fuzzMoveConfig.route = {
+      endpoint: "https://two.example",
+      toJSON() {
+        throw new Error("fuzzplugin toJSON should fall back to readable fields");
+      },
+    };
+    const secondThrowingJsonKey = testing.resolvePluginLoadCacheContext({ config }).cacheKey;
+    fuzzMoveConfig.route = {
+      endpoint: "https://self-one.example",
+      toJSON() {
+        return this;
+      },
+    };
+    const firstSelfJsonKey = testing.resolvePluginLoadCacheContext({ config }).cacheKey;
+    fuzzMoveConfig.route = {
+      endpoint: "https://self-two.example",
+      toJSON() {
+        return this;
+      },
+    };
+
+    expect(bigintKey).not.toBe(stringKey);
+    expect(dateKey).not.toBe(bigintKey);
+    expect(urlKey).not.toBe(dateKey);
+    expect(secondThrowingJsonKey).not.toBe(firstThrowingJsonKey);
+    expect(testing.resolvePluginLoadCacheContext({ config }).cacheKey).not.toBe(firstSelfJsonKey);
   });
 
   it("falls back to the current active runtime when no compatibility-shaping inputs are supplied", () => {
