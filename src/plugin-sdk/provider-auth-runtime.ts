@@ -23,6 +23,32 @@ export type { ResolvedProviderRuntimeAuth } from "../plugins/runtime/model-auth-
 
 export type OAuthCallbackResult = { code: string; state: string };
 
+function copyStringArrayEntries(value: readonly string[] | undefined): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const entries: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      if (index in value) {
+        const entry = value[index];
+        if (typeof entry === "string") {
+          entries.push(entry);
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
 // IdP-host allowlist for CORS echo on the loopback OAuth callback. Plugins
 // pass the hosts that may legitimately issue preflights against the redirect
 // URI; everything else gets a 204 with no `Access-Control-Allow-*` headers,
@@ -32,11 +58,12 @@ export type OAuthCallbackResult = { code: string; state: string };
 export function buildOAuthCallbackOriginResolver(
   allowedHosts: readonly string[] | undefined,
 ): (originHeader: string | string[] | undefined) => string | undefined {
-  if (!allowedHosts || allowedHosts.length === 0) {
+  const hostEntries = copyStringArrayEntries(allowedHosts);
+  if (hostEntries.length === 0) {
     return () => undefined;
   }
   const normalized = new Set(
-    allowedHosts.map((host) => host.trim().toLowerCase()).filter((host) => host.length > 0),
+    hostEntries.map((host) => host.trim().toLowerCase()).filter((host) => host.length > 0),
   );
   if (normalized.size === 0) {
     return () => undefined;
@@ -108,9 +135,9 @@ export async function waitForLocalOAuthCallback(params: {
 }): Promise<OAuthCallbackResult> {
   const hostname = params.hostname ?? "localhost";
   const escapedSuccessTitle = escapeHtmlText(params.successTitle);
-  const resolveOAuthCallbackOrigin = buildOAuthCallbackOriginResolver(params.corsOriginAllowlist);
-  const hasCorsOriginAllowlist =
-    params.corsOriginAllowlist?.some((host) => host.trim().length > 0) ?? false;
+  const corsOriginAllowlist = copyStringArrayEntries(params.corsOriginAllowlist);
+  const resolveOAuthCallbackOrigin = buildOAuthCallbackOriginResolver(corsOriginAllowlist);
+  const hasCorsOriginAllowlist = corsOriginAllowlist.some((host) => host.trim().length > 0);
 
   return new Promise<OAuthCallbackResult>((resolve, reject) => {
     let settled = false;

@@ -45,6 +45,23 @@ describe("plugin-sdk provider-auth-runtime", () => {
 
   it("allows browser IdP pages to probe the localhost callback with CORS", async () => {
     const port = await getFreePort();
+    const corsOriginAllowlist = Object.assign(["auth.x.ai", "accounts.x.ai"], {
+      map() {
+        throw new Error("fuzzplugin cors allowlist map failed");
+      },
+      some() {
+        throw new Error("mockplugin cors allowlist some failed");
+      },
+      [Symbol.iterator]() {
+        throw new Error("mockplugin cors allowlist iterator failed");
+      },
+    });
+    Object.defineProperty(corsOriginAllowlist, "2", {
+      enumerable: true,
+      get() {
+        throw new Error("mockplugin cors allowlist entry failed");
+      },
+    });
     const callback = providerAuthRuntime.waitForLocalOAuthCallback({
       expectedState: "state-1",
       timeoutMs: 5_000,
@@ -53,7 +70,7 @@ describe("plugin-sdk provider-auth-runtime", () => {
       redirectUri: `http://127.0.0.1:${port}/callback`,
       hostname: "127.0.0.1",
       successTitle: "OAuth complete",
-      corsOriginAllowlist: ["auth.x.ai", "accounts.x.ai"],
+      corsOriginAllowlist,
     });
 
     const preflight = await fetch(`http://127.0.0.1:${port}/callback`, {
@@ -178,6 +195,30 @@ describe("buildOAuthCallbackOriginResolver", () => {
     expect(resolver("not a url")).toBeUndefined();
     expect(resolver(undefined)).toBeUndefined();
     expect(resolver([])).toBeUndefined();
+  });
+
+  it("copies hostile allowlist arrays before resolving callback origins", () => {
+    const allowedHosts = Object.assign(["auth.fuzzplugin.example", "accounts.mockplugin.example"], {
+      map() {
+        throw new Error("fuzzplugin cors allowlist map failed");
+      },
+      [Symbol.iterator]() {
+        throw new Error("mockplugin cors allowlist iterator failed");
+      },
+    });
+    Object.defineProperty(allowedHosts, "2", {
+      enumerable: true,
+      get() {
+        throw new Error("mockplugin cors allowlist entry failed");
+      },
+    });
+
+    const resolver = providerAuthRuntime.buildOAuthCallbackOriginResolver(allowedHosts);
+
+    expect(resolver("https://auth.fuzzplugin.example")).toBe("https://auth.fuzzplugin.example");
+    expect(resolver("https://accounts.mockplugin.example")).toBe(
+      "https://accounts.mockplugin.example",
+    );
   });
 
   it("uses the first value when multiple Origin headers arrive", () => {
