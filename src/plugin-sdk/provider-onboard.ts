@@ -15,7 +15,7 @@ import type {
   ModelProviderConfig,
 } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolvePrimaryStringValue } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type { OpenClawConfig, ModelApi, ModelDefinitionConfig, ModelProviderConfig };
 export {
@@ -42,6 +42,151 @@ export type ProviderOnboardPresetAppliers<TArgs extends unknown[]> = {
   applyConfig: (cfg: OpenClawConfig, ...args: TArgs) => OpenClawConfig;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+type ReadValueResult = {
+  value: unknown;
+  complete: boolean;
+};
+
+function readRecordValueResult(record: unknown, key: string): ReadValueResult {
+  if (!isRecord(record)) {
+    return { value: undefined, complete: true };
+  }
+  try {
+    return { value: record[key], complete: true };
+  } catch {
+    return { value: undefined, complete: false };
+  }
+}
+
+function readRecordValue(record: unknown, key: string): unknown {
+  return readRecordValueResult(record, key).value;
+}
+
+type RecordEntriesResult = {
+  entries: Array<[string, unknown]>;
+  complete: boolean;
+};
+
+function copyRecordEntriesResult(
+  value: unknown,
+  options?: {
+    incompleteOnReadError?: boolean;
+  },
+): RecordEntriesResult {
+  if (!isRecord(value)) {
+    return { entries: [], complete: true };
+  }
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return { entries: [], complete: false };
+  }
+  const entries: Array<[string, unknown]> = [];
+  let complete = true;
+  for (const key of keys) {
+    try {
+      entries.push([key, value[key]]);
+    } catch {
+      if (options?.incompleteOnReadError) {
+        complete = false;
+      }
+      continue;
+    }
+  }
+  return { entries, complete };
+}
+
+function copyRecordEntries(value: unknown): Array<[string, unknown]> {
+  return copyRecordEntriesResult(value).entries;
+}
+
+function copyRecordResult(value: unknown): {
+  record: Record<string, unknown>;
+  complete: boolean;
+} {
+  const result = copyRecordEntriesResult(value, { incompleteOnReadError: true });
+  return { record: Object.fromEntries(result.entries), complete: result.complete };
+}
+
+function copyRecord(value: unknown): Record<string, unknown> {
+  return copyRecordResult(value).record;
+}
+
+function createMutableRecord<T>(): Record<string, T> {
+  return Object.create(null) as Record<string, T>;
+}
+
+type ArrayEntriesResult<T> = {
+  entries: T[];
+  complete: boolean;
+  length: number;
+};
+
+function copyArrayEntriesResult<T = unknown>(value: unknown): ArrayEntriesResult<T> {
+  if (!Array.isArray(value)) {
+    return { entries: [], complete: true, length: 0 };
+  }
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return { entries: [], complete: false, length: 0 };
+  }
+  const entries: T[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      if (index in value) {
+        entries.push(value[index] as T);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return { entries, complete: entries.length === length, length };
+}
+
+function copyArrayEntries<T = unknown>(value: unknown): T[] {
+  return copyArrayEntriesResult<T>(value).entries;
+}
+
+function readPrimaryStringValueResult(value: unknown): {
+  value: string | undefined;
+  complete: boolean;
+} {
+  if (typeof value === "string") {
+    return { value: normalizeOptionalString(value), complete: true };
+  }
+  const primary = readRecordValueResult(value, "primary");
+  return {
+    value: normalizeOptionalString(primary.value),
+    complete: primary.complete,
+  };
+}
+
+function readAgentDefaults(cfg: OpenClawConfig): unknown {
+  return readRecordValue(readRecordValue(cfg, "agents"), "defaults");
+}
+
+function readAgentDefaultModelsResult(cfg: OpenClawConfig): {
+  models: Record<string, AgentModelEntryConfig>;
+  complete: boolean;
+} {
+  const result = copyRecordResult(readRecordValue(readAgentDefaults(cfg), "models"));
+  return {
+    models: result.record as Record<string, AgentModelEntryConfig>,
+    complete: result.complete,
+  };
+}
+
+function readModelsConfig(cfg: OpenClawConfig): unknown {
+  return readRecordValue(cfg, "models");
+}
+
 function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined {
   if (!model || typeof model !== "object") {
     return undefined;
@@ -49,12 +194,15 @@ function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined
   if (!("fallbacks" in model)) {
     return undefined;
   }
-  const fallbacks = (model as { fallbacks?: unknown }).fallbacks;
-  return Array.isArray(fallbacks) ? fallbacks.map((value) => String(value)) : undefined;
+  const fallbacks = readRecordValue(model, "fallbacks");
+  return Array.isArray(fallbacks)
+    ? copyArrayEntries(fallbacks).map((value) => String(value))
+    : undefined;
 }
 
 function hasAgentDefaultModelPrimary(cfg: OpenClawConfig): boolean {
-  return resolvePrimaryStringValue(cfg.agents?.defaults?.model) !== undefined;
+  const result = readPrimaryStringValueResult(readRecordValue(readAgentDefaults(cfg), "model"));
+  return !result.complete || result.value !== undefined;
 }
 
 function normalizeAgentModelAliasEntry(entry: AgentModelAliasEntry): {
@@ -64,33 +212,57 @@ function normalizeAgentModelAliasEntry(entry: AgentModelAliasEntry): {
   if (typeof entry === "string") {
     return { modelRef: entry };
   }
-  return entry;
+  return {
+    modelRef: String(readRecordValue(entry, "modelRef") ?? ""),
+    ...(typeof readRecordValue(entry, "alias") === "string"
+      ? { alias: String(readRecordValue(entry, "alias")) }
+      : undefined),
+  };
 }
 
 type ProviderModelMergeState = {
   providers: Record<string, ModelProviderConfig>;
+  providerMapReadable: boolean;
   existingProvider?: ModelProviderConfig;
   existingModels: ModelDefinitionConfig[];
 };
 
 function normalizeProviderModelForConfig(
   providerId: string,
-  model: ModelDefinitionConfig,
-): ModelDefinitionConfig {
-  const id = normalizeConfiguredProviderCatalogModelId(providerId, model.id);
-  return id === model.id ? model : { ...model, id };
+  model: unknown,
+): ModelDefinitionConfig | undefined {
+  if (!isRecord(model)) {
+    return undefined;
+  }
+  const modelId = readRecordValue(model, "id");
+  if (typeof modelId !== "string") {
+    return undefined;
+  }
+  const id = normalizeConfiguredProviderCatalogModelId(providerId, modelId);
+  return id === modelId
+    ? (model as ModelDefinitionConfig)
+    : { ...(copyRecord(model) as ModelDefinitionConfig), id };
 }
 
 function normalizeProviderModelsForConfig(
   providerId: string,
-  models: ModelDefinitionConfig[],
+  models: unknown,
 ): ModelDefinitionConfig[] {
   let mutated = false;
   const next: ModelDefinitionConfig[] = [];
   const seenById = new Map<string, number>();
 
-  for (const model of models) {
+  const copiedModels = copyArrayEntriesResult(models);
+  const modelEntries = copiedModels.entries;
+  if (!Array.isArray(models) || !copiedModels.complete) {
+    mutated = true;
+  }
+  for (const model of modelEntries) {
     const normalized = normalizeProviderModelForConfig(providerId, model);
+    if (!normalized) {
+      mutated = true;
+      continue;
+    }
     if (normalized !== model) {
       mutated = true;
     }
@@ -104,7 +276,7 @@ function normalizeProviderModelsForConfig(
     next.push(normalized);
   }
 
-  return mutated ? next : models;
+  return mutated ? next : (models as ModelDefinitionConfig[]);
 }
 
 function normalizeModelProvidersForConfig(
@@ -114,41 +286,65 @@ function normalizeModelProvidersForConfig(
     return providers;
   }
 
-  let mutated = false;
-  const nextProviders: Record<string, ModelProviderConfig> = {};
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
-    const models = Array.isArray(providerConfig.models)
-      ? normalizeProviderModelsForConfig(providerId, providerConfig.models)
-      : providerConfig.models;
-    if (models !== providerConfig.models) {
-      mutated = true;
-      nextProviders[providerId] = { ...providerConfig, models };
+  const nextProviders = createMutableRecord<ModelProviderConfig>();
+  const copiedProviders = copyRecordEntriesResult(providers);
+  if (!copiedProviders.complete) {
+    return providers;
+  }
+  for (const [providerId, providerConfig] of copiedProviders.entries) {
+    if (!isRecord(providerConfig)) {
       continue;
     }
-    nextProviders[providerId] = providerConfig;
+    const modelValue = readRecordValue(providerConfig, "models");
+    if (Array.isArray(modelValue)) {
+      const models = normalizeProviderModelsForConfig(providerId, modelValue);
+      if (models === modelValue) {
+        nextProviders[providerId] = providerConfig as ModelProviderConfig;
+        continue;
+      }
+      nextProviders[providerId] = {
+        ...(copyRecord(providerConfig) as ModelProviderConfig),
+        models,
+      };
+      continue;
+    }
+    nextProviders[providerId] = providerConfig as ModelProviderConfig;
   }
 
-  return mutated ? nextProviders : providers;
+  return nextProviders;
 }
 
 function resolveProviderModelMergeState(
   cfg: OpenClawConfig,
   providerId: string,
 ): ProviderModelMergeState {
-  const providers = { ...cfg.models?.providers } as Record<string, ModelProviderConfig>;
+  const providers = createMutableRecord<ModelProviderConfig>();
+  const copiedProviders = copyRecordEntriesResult(
+    readRecordValue(readModelsConfig(cfg), "providers"),
+  );
+  if (!copiedProviders.complete) {
+    return { providers, providerMapReadable: false, existingModels: [] };
+  }
+  for (const [key, value] of copiedProviders.entries) {
+    if (isRecord(value)) {
+      providers[key] = value as ModelProviderConfig;
+    }
+  }
   const existingProviderKey = findNormalizedProviderKey(providers, providerId);
   const existingProvider =
     existingProviderKey !== undefined
-      ? (providers[existingProviderKey] as ModelProviderConfig | undefined)
+      ? (readRecordValue(providers, existingProviderKey) as ModelProviderConfig | undefined)
       : undefined;
-  const existingModels: ModelDefinitionConfig[] = Array.isArray(existingProvider?.models)
-    ? normalizeProviderModelsForConfig(providerId, existingProvider.models)
+  const existingModelValue = readRecordValue(existingProvider, "models");
+  const existingModels: ModelDefinitionConfig[] = Array.isArray(existingModelValue)
+    ? normalizeProviderModelsForConfig(providerId, existingModelValue)
     : [];
   if (existingProviderKey && existingProviderKey !== providerId) {
     delete providers[existingProviderKey];
   }
   return {
     providers,
+    providerMapReadable: true,
     existingProvider: existingProvider
       ? { ...existingProvider, models: existingModels }
       : existingProvider,
@@ -163,9 +359,11 @@ function buildProviderConfig(params: {
   mergedModels: ModelDefinitionConfig[];
   fallbackModels: ModelDefinitionConfig[];
 }): ModelProviderConfig {
-  const { apiKey: existingApiKey, ...existingProviderRest } = (params.existingProvider ?? {}) as {
-    apiKey?: string;
+  const existingProviderRest = copyRecord(params.existingProvider) as ModelProviderConfig & {
+    apiKey?: unknown;
   };
+  const existingApiKey = existingProviderRest.apiKey;
+  delete existingProviderRest.apiKey;
   const normalizedApiKey = typeof existingApiKey === "string" ? existingApiKey.trim() : undefined;
 
   return {
@@ -189,6 +387,9 @@ function applyProviderConfigWithMergedModels(
     fallbackModels: ModelDefinitionConfig[];
   },
 ): OpenClawConfig {
+  if (!params.providerState.providerMapReadable) {
+    return cfg;
+  }
   const mergedModels = normalizeProviderModelsForConfig(params.providerId, params.mergedModels);
   const fallbackModels = normalizeProviderModelsForConfig(params.providerId, params.fallbackModels);
   params.providerState.providers[params.providerId] = buildProviderConfig({
@@ -239,9 +440,14 @@ export function withAgentModelAliases(
   existing: Record<string, AgentModelEntryConfig> | undefined,
   aliases: readonly AgentModelAliasEntry[],
 ): Record<string, AgentModelEntryConfig> {
-  const next = normalizeAgentModelMapForConfig({ ...existing });
-  for (const entry of aliases) {
+  const next = normalizeAgentModelMapForConfig(
+    copyRecord(existing) as Record<string, AgentModelEntryConfig>,
+  );
+  for (const entry of copyArrayEntries<AgentModelAliasEntry>(aliases)) {
     const normalized = normalizeAgentModelAliasEntry(entry);
+    if (!normalized.modelRef) {
+      continue;
+    }
     const modelRef = normalizeAgentModelRefForConfig(normalized.modelRef);
     next[modelRef] = {
       ...next[modelRef],
@@ -258,21 +464,44 @@ export function applyOnboardAuthAgentModelsAndProviders(
     providers: Record<string, ModelProviderConfig>;
   },
 ): OpenClawConfig {
-  const mergedAgentModels = normalizeAgentModelMapForConfig({
-    ...cfg.agents?.defaults?.models,
-    ...params.agentModels,
+  const cfgCopy = copyRecordResult(cfg);
+  const agentsValue = readRecordValue(cfg, "agents");
+  const agentsCopy = copyRecordResult(agentsValue);
+  const defaultsValue = readRecordValue(agentsValue, "defaults");
+  const defaultsCopy = copyRecordResult(defaultsValue);
+  const modelsValue = readModelsConfig(cfg);
+  const modelsCopy = copyRecordResult(modelsValue);
+  const defaultModelsValue = readRecordValue(defaultsValue, "models");
+  const defaultModelsCopy = copyRecordEntriesResult(defaultModelsValue, {
+    incompleteOnReadError: true,
   });
+  if (
+    !cfgCopy.complete ||
+    (isRecord(agentsValue) && !agentsCopy.complete) ||
+    (isRecord(defaultsValue) && !defaultsCopy.complete) ||
+    (isRecord(defaultModelsValue) && !defaultModelsCopy.complete) ||
+    (isRecord(modelsValue) && !modelsCopy.complete)
+  ) {
+    return cfg;
+  }
+  const mode = readRecordValue(modelsValue, "mode");
+  const mergedAgentModels = normalizeAgentModelMapForConfig(
+    Object.fromEntries([
+      ...defaultModelsCopy.entries,
+      ...copyRecordEntries(params.agentModels),
+    ]) as Record<string, AgentModelEntryConfig>,
+  );
   return {
-    ...cfg,
+    ...(cfgCopy.record as OpenClawConfig),
     agents: {
-      ...cfg.agents,
+      ...agentsCopy.record,
       defaults: {
-        ...cfg.agents?.defaults,
+        ...defaultsCopy.record,
         models: mergedAgentModels,
       },
     },
     models: {
-      mode: cfg.models?.mode ?? "merge",
+      mode: mode ?? "merge",
       providers: params.providers,
     },
   };
@@ -282,20 +511,45 @@ export function applyAgentDefaultModelPrimary(
   cfg: OpenClawConfig,
   primary: string,
 ): OpenClawConfig {
-  const defaults = cfg.agents?.defaults;
-  const existingFallbacks = extractAgentDefaultModelFallbacks(cfg.agents?.defaults?.model);
+  const cfgCopy = copyRecordResult(cfg);
+  const agentsValue = readRecordValue(cfg, "agents");
+  const agentsCopy = copyRecordResult(agentsValue);
+  const defaults = readAgentDefaults(cfg);
+  const defaultsCopy = copyRecordResult(defaults);
+  if (
+    !cfgCopy.complete ||
+    (isRecord(agentsValue) && !agentsCopy.complete) ||
+    (isRecord(defaults) && !defaultsCopy.complete)
+  ) {
+    return cfg;
+  }
+  const existingFallbacks = extractAgentDefaultModelFallbacks(readRecordValue(defaults, "model"));
   const normalizedFallbacks = existingFallbacks?.map((fallback) =>
     normalizeAgentModelRefForConfig(fallback),
   );
+  const defaultModelsValue = readRecordValue(defaults, "models");
+  const defaultModelsCopy = copyRecordResult(defaultModelsValue);
   const normalizedModels =
-    defaults?.models === undefined ? undefined : normalizeAgentModelMapForConfig(defaults.models);
-  const normalizedProviders = normalizeModelProvidersForConfig(cfg.models?.providers);
+    defaultModelsValue === undefined
+      ? undefined
+      : defaultModelsCopy.complete
+        ? normalizeAgentModelMapForConfig(
+            defaultModelsCopy.record as Record<string, AgentModelEntryConfig>,
+          )
+        : (defaultModelsValue as Record<string, AgentModelEntryConfig>);
+  const models = readModelsConfig(cfg);
+  const modelsCopy = copyRecordResult(models);
+  const normalizedProviders = modelsCopy.complete
+    ? normalizeModelProvidersForConfig(
+        readRecordValue(models, "providers") as Record<string, ModelProviderConfig> | undefined,
+      )
+    : undefined;
   return {
-    ...cfg,
+    ...(cfgCopy.record as OpenClawConfig),
     agents: {
-      ...cfg.agents,
+      ...agentsCopy.record,
       defaults: {
-        ...defaults,
+        ...defaultsCopy.record,
         model: {
           ...(normalizedFallbacks ? { fallbacks: normalizedFallbacks } : undefined),
           primary: normalizeAgentModelRefForConfig(primary),
@@ -306,11 +560,13 @@ export function applyAgentDefaultModelPrimary(
     ...(normalizedProviders !== undefined
       ? {
           models: {
-            ...cfg.models,
+            ...modelsCopy.record,
             providers: normalizedProviders,
           },
         }
-      : undefined),
+      : isRecord(models)
+        ? { models: models as OpenClawConfig["models"] }
+        : undefined),
   };
 }
 
@@ -318,7 +574,13 @@ export function applyOpencodeZenModelDefault(cfg: OpenClawConfig): {
   next: OpenClawConfig;
   changed: boolean;
 } {
-  const current = resolvePrimaryStringValue(cfg.agents?.defaults?.model);
+  const currentResult = readPrimaryStringValueResult(
+    readRecordValue(readAgentDefaults(cfg), "model"),
+  );
+  if (!currentResult.complete) {
+    return { next: cfg, changed: false };
+  }
+  const current = currentResult.value;
   const normalizedCurrent =
     current && LEGACY_OPENCODE_ZEN_DEFAULT_MODELS.has(current)
       ? OPENCODE_ZEN_DEFAULT_MODEL
@@ -344,7 +606,7 @@ export function applyProviderConfigWithDefaultModels(
   },
 ): OpenClawConfig {
   const providerState = resolveProviderModelMergeState(cfg, params.providerId);
-  const defaultModels = params.defaultModels;
+  const defaultModels = normalizeProviderModelsForConfig(params.providerId, params.defaultModels);
   const defaultModelId = params.defaultModelId ?? defaultModels[0]?.id;
   const hasDefaultModel = defaultModelId
     ? providerState.existingModels.some((model) => model.id === defaultModelId)
@@ -383,7 +645,11 @@ export function applyProviderConfigWithDefaultModel(
     api: params.api,
     baseUrl: params.baseUrl,
     defaultModels: [params.defaultModel],
-    defaultModelId: params.defaultModelId ?? params.defaultModel.id,
+    defaultModelId:
+      params.defaultModelId ??
+      (typeof readRecordValue(params.defaultModel, "id") === "string"
+        ? String(readRecordValue(params.defaultModel, "id"))
+        : undefined),
   });
 }
 
@@ -399,14 +665,21 @@ export function applyProviderConfigWithDefaultModelPreset(
     primaryModelRef?: string;
   },
 ): OpenClawConfig {
+  const agentModels = readAgentDefaultModelsResult(cfg);
+  if (!agentModels.complete) {
+    return cfg;
+  }
   const next = applyProviderConfigWithDefaultModel(cfg, {
-    agentModels: withAgentModelAliases(cfg.agents?.defaults?.models, params.aliases ?? []),
+    agentModels: withAgentModelAliases(agentModels.models, params.aliases ?? []),
     providerId: params.providerId,
     api: params.api,
     baseUrl: params.baseUrl,
     defaultModel: params.defaultModel,
     defaultModelId: params.defaultModelId,
   });
+  if (next === cfg) {
+    return cfg;
+  }
   return params.primaryModelRef
     ? hasAgentDefaultModelPrimary(cfg)
       ? next
@@ -443,14 +716,21 @@ export function applyProviderConfigWithDefaultModelsPreset(
     primaryModelRef?: string;
   },
 ): OpenClawConfig {
+  const agentModels = readAgentDefaultModelsResult(cfg);
+  if (!agentModels.complete) {
+    return cfg;
+  }
   const next = applyProviderConfigWithDefaultModels(cfg, {
-    agentModels: withAgentModelAliases(cfg.agents?.defaults?.models, params.aliases ?? []),
+    agentModels: withAgentModelAliases(agentModels.models, params.aliases ?? []),
     providerId: params.providerId,
     api: params.api,
     baseUrl: params.baseUrl,
     defaultModels: params.defaultModels,
     defaultModelId: params.defaultModelId,
   });
+  if (next === cfg) {
+    return cfg;
+  }
   return params.primaryModelRef
     ? hasAgentDefaultModelPrimary(cfg)
       ? next
@@ -486,7 +766,7 @@ export function applyProviderConfigWithModelCatalog(
   },
 ): OpenClawConfig {
   const providerState = resolveProviderModelMergeState(cfg, params.providerId);
-  const catalogModels = params.catalogModels;
+  const catalogModels = normalizeProviderModelsForConfig(params.providerId, params.catalogModels);
   const mergedModels =
     providerState.existingModels.length > 0
       ? [
@@ -518,13 +798,20 @@ export function applyProviderConfigWithModelCatalogPreset(
     primaryModelRef?: string;
   },
 ): OpenClawConfig {
+  const agentModels = readAgentDefaultModelsResult(cfg);
+  if (!agentModels.complete) {
+    return cfg;
+  }
   const next = applyProviderConfigWithModelCatalog(cfg, {
-    agentModels: withAgentModelAliases(cfg.agents?.defaults?.models, params.aliases ?? []),
+    agentModels: withAgentModelAliases(agentModels.models, params.aliases ?? []),
     providerId: params.providerId,
     api: params.api,
     baseUrl: params.baseUrl,
     catalogModels: params.catalogModels,
   });
+  if (next === cfg) {
+    return cfg;
+  }
   return params.primaryModelRef
     ? hasAgentDefaultModelPrimary(cfg)
       ? next
