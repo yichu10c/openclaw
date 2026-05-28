@@ -6,14 +6,34 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
 const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() =>
   vi.fn((config: OpenClawConfig) => {
-    return Object.entries(config.channels ?? {})
+    const channels = config.channels;
+    if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+      return [];
+    }
+    let keys: string[] = [];
+    try {
+      keys = Object.keys(channels);
+    } catch {
+      return [];
+    }
+    return keys
+      .flatMap((channelId) => {
+        let value: unknown;
+        try {
+          value = (channels as Record<string, unknown>)[channelId];
+        } catch {
+          return [];
+        }
+        return [[channelId, value] as const];
+      })
       .filter(([, value]) => {
-        return (
-          !!value &&
-          typeof value === "object" &&
-          !Array.isArray(value) &&
-          (value as { enabled?: unknown }).enabled === false
-        );
+        let enabled: unknown;
+        try {
+          enabled = (value as { enabled?: unknown }).enabled;
+        } catch {
+          return false;
+        }
+        return !!value && typeof value === "object" && !Array.isArray(value) && enabled === false;
       })
       .map(([channelId]) => channelId.toLowerCase());
   }),
@@ -22,11 +42,18 @@ const listPotentialConfiguredChannelPresenceSignals = vi.hoisted(() => vi.fn());
 const hasPotentialConfiguredChannels = vi.hoisted(() => vi.fn());
 const hasMeaningfulChannelConfig = vi.hoisted(() =>
   vi.fn((value: unknown) => {
+    let keys: string[] = [];
+    try {
+      keys =
+        !!value && typeof value === "object" && !Array.isArray(value) ? Object.keys(value) : [];
+    } catch {
+      return false;
+    }
     return (
       !!value &&
       typeof value === "object" &&
       !Array.isArray(value) &&
-      Object.keys(value).some((key) => key !== "enabled")
+      keys.some((key) => key !== "enabled")
     );
   }),
 );
@@ -2463,6 +2490,57 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         },
       } as OpenClawConfig),
     ).toEqual(["demo-channel"]);
+  });
+
+  it("skips unreadable synthetic channel config entries during read-only policy", () => {
+    const channels: Record<string, unknown> = {
+      mockplugin: {
+        enabled: true,
+      },
+    };
+    Object.defineProperty(channels, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin channel config is unreadable");
+      },
+    });
+    const config = { channels } as OpenClawConfig;
+
+    expect(listExplicitConfiguredChannelIdsForConfig(config)).toStrictEqual(["mockplugin"]);
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config,
+        workspaceDir: "/tmp",
+        env: {},
+        includePersistedAuthState: false,
+        manifestRecords: [
+          withManifestLoadPaths({
+            id: "mockplugin",
+            channels: ["mockplugin"],
+            origin: "bundled",
+            enabledByDefault: undefined,
+            providers: [],
+            cliBackends: [],
+          }),
+          withManifestLoadPaths({
+            id: "fuzzplugin",
+            channels: ["fuzzplugin"],
+            origin: "bundled",
+            enabledByDefault: undefined,
+            providers: [],
+            cliBackends: [],
+          }),
+        ],
+      }),
+    ).toStrictEqual([
+      {
+        channelId: "mockplugin",
+        sources: ["explicit-config"],
+        effective: true,
+        pluginIds: ["mockplugin"],
+        blockedReasons: [],
+      },
+    ]);
   });
 
   it("does not let disabled mixed-case channel config announce ambient matches", () => {

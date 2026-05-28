@@ -7,6 +7,7 @@ import {
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSafeChannelEnvVarTriggerName } from "../secrets/channel-env-var-names.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
@@ -70,6 +71,36 @@ function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!isRecord(record)) {
+    return undefined;
+  }
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function copyRecordKeys(value: unknown): string[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  try {
+    return Object.keys(value);
+  } catch {
+    return [];
+  }
+}
+
+function hasSafeMeaningfulChannelConfig(value: unknown): boolean {
+  try {
+    return hasMeaningfulChannelConfig(value);
+  } catch {
+    return false;
+  }
+}
+
 export function hasExplicitChannelConfig(params: {
   config: OpenClawConfig;
   channelId: string;
@@ -78,15 +109,15 @@ export function hasExplicitChannelConfig(params: {
   if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
     return false;
   }
-  const entry = (channels as Record<string, unknown>)[params.channelId];
+  const entry = readRecordValue(channels, params.channelId);
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
     return false;
   }
-  const enabled = (entry as { enabled?: unknown }).enabled;
+  const enabled = readRecordValue(entry, "enabled");
   if (enabled === false) {
     return false;
   }
-  return enabled === true || hasMeaningfulChannelConfig(entry);
+  return enabled === true || hasSafeMeaningfulChannelConfig(entry);
 }
 
 export function listExplicitConfiguredChannelIdsForConfig(config: OpenClawConfig): string[] {
@@ -94,7 +125,7 @@ export function listExplicitConfiguredChannelIdsForConfig(config: OpenClawConfig
   if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
     return [];
   }
-  return Object.keys(channels)
+  return copyRecordKeys(channels)
     .filter(
       (channelId) =>
         !IGNORED_CHANNEL_CONFIG_KEYS.has(channelId) &&
