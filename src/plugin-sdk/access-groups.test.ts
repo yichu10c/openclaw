@@ -56,4 +56,43 @@ describe("access group allowlists", () => {
       }),
     ).resolves.toEqual(["accessGroup:admins", "local"]);
   });
+
+  it("expands access groups without using source allowlist array methods", async () => {
+    const cfg = {
+      accessGroups: {
+        owners: { type: "message.senders", members: { telegram: ["owner"] } },
+      },
+    } as OpenClawConfig;
+    const allowFrom = Object.assign(["accessGroup:owners", "skip", 42], {
+      map() {
+        throw new Error("fuzzplugin access group allowFrom map failed");
+      },
+      [Symbol.iterator]() {
+        throw new Error("mockplugin access group allowFrom iterator failed");
+      },
+    });
+    delete allowFrom[1];
+
+    const state = await resolveAccessGroupAllowFromState({
+      accessGroups: cfg.accessGroups,
+      allowFrom,
+      channel: "telegram",
+      accountId: "default",
+      senderId: "owner",
+      isSenderAllowed: (senderId, entries) => entries.includes(senderId),
+    });
+    expect(state.referenced).toEqual(["owners"]);
+    expect(state.matchedAllowFromEntries).toEqual(["accessGroup:owners"]);
+
+    await expect(
+      expandAllowFromWithAccessGroups({
+        cfg,
+        allowFrom,
+        channel: "telegram",
+        accountId: "default",
+        senderId: "owner",
+        isSenderAllowed: (senderId, entries) => entries.includes(senderId),
+      }),
+    ).resolves.toEqual(["accessGroup:owners", "42", "owner"]);
+  });
 });

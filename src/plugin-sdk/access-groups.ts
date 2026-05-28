@@ -47,6 +47,32 @@ function resolveMessageSenderGroupEntries(params: {
   return [...(params.group.members["*"] ?? []), ...(params.group.members[params.channel] ?? [])];
 }
 
+function copyAllowFromEntries(allowFrom: Array<string | number> | null | undefined): string[] {
+  if (!Array.isArray(allowFrom)) {
+    return [];
+  }
+
+  let length: number;
+  try {
+    length = allowFrom.length;
+  } catch {
+    return [];
+  }
+
+  const entries: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      if (!(index in allowFrom)) {
+        continue;
+      }
+      entries.push(String(allowFrom[index]));
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
 export async function resolveAccessGroupAllowFromState(params: {
   accessGroups?: Record<string, AccessGroupConfig>;
   allowFrom: Array<string | number> | null | undefined;
@@ -58,8 +84,8 @@ export async function resolveAccessGroupAllowFromState(params: {
 }): Promise<ResolvedAccessGroupAllowFromState> {
   const names = Array.from(
     new Set(
-      (params.allowFrom ?? [])
-        .map((entry) => parseAccessGroupAllowFromEntry(String(entry)))
+      copyAllowFromEntries(params.allowFrom)
+        .map((entry) => parseAccessGroupAllowFromEntry(entry))
         .filter((entry): entry is string => entry != null),
     ),
   );
@@ -164,7 +190,7 @@ export async function expandAllowFromWithAccessGroups(params: {
   isSenderAllowed?: (senderId: string, allowFrom: string[]) => boolean;
   resolveMembership?: AccessGroupMembershipResolver;
 }): Promise<string[]> {
-  const allowFrom = (params.allowFrom ?? []).map(String);
+  const allowFrom = copyAllowFromEntries(params.allowFrom);
   const matched = await resolveAccessGroupAllowFromMatches({
     cfg: params.cfg,
     allowFrom,
