@@ -1,5 +1,5 @@
 import { assertMediaNotDataUrl, resolveSandboxedMediaSource } from "../../agents/sandbox-paths.js";
-import { readStringParam } from "../../agents/tools/common.js";
+import { readStringParam, ToolInputError } from "../../agents/tools/common.js";
 import { resolveChannelMessageToolMediaSourceParamKeys } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -41,6 +41,7 @@ const STRUCTURED_ATTACHMENT_MEDIA_SOURCE_PARAM_KEYS = [
   "url",
 ] as const;
 const STRUCTURED_ATTACHMENT_FILE_SOURCE_PARAM_KEYS = new Set(["path", "filePath", "fileUrl"]);
+const MAX_STRUCTURED_ATTACHMENT_ENTRIES = 10_000;
 
 type StructuredAttachmentSource = {
   attachment: Record<string, unknown>;
@@ -59,6 +60,41 @@ function readMediaParam(args: Record<string, unknown>, key: string): string | un
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readRecordValue(record: Record<string, unknown>, key: string): unknown {
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function copyStructuredAttachmentEntries(args: Record<string, unknown>): unknown[] {
+  const attachments = readRecordValue(args, "attachments");
+  if (!Array.isArray(attachments)) {
+    return [];
+  }
+  let length = 0;
+  try {
+    length = attachments.length;
+  } catch {
+    return [];
+  }
+  if (length > MAX_STRUCTURED_ATTACHMENT_ENTRIES) {
+    throw new ToolInputError(
+      `attachments supports at most ${MAX_STRUCTURED_ATTACHMENT_ENTRIES} entries`,
+    );
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < Math.max(0, length); index += 1) {
+    try {
+      entries.push(attachments[index]);
+    } catch {
+      // Unreadable structured attachment entries are treated as absent.
+    }
+  }
+  return entries;
 }
 
 function resolveMediaParamEntry(
@@ -95,12 +131,8 @@ function hasExplicitAttachmentPayload(
 function collectStructuredAttachmentSources(
   args: Record<string, unknown>,
 ): StructuredAttachmentSource[] {
-  const attachments = args.attachments;
-  if (!Array.isArray(attachments)) {
-    return [];
-  }
   const sources: StructuredAttachmentSource[] = [];
-  for (const attachment of attachments) {
+  for (const attachment of copyStructuredAttachmentEntries(args)) {
     if (!isRecord(attachment)) {
       continue;
     }

@@ -313,6 +313,39 @@ describe("message action media helpers", () => {
     ]);
   });
 
+  it("treats unreadable synthetic structured attachments as absent", () => {
+    const args = {
+      get attachments() {
+        throw new Error("fuzzplugin attachments getter failed");
+      },
+    } as Record<string, unknown>;
+
+    expect(collectActionMediaSourceHints(args)).toEqual([]);
+  });
+
+  it("copies synthetic structured attachments without trusting iterators", () => {
+    const attachments = new Proxy([{ path: "/workspace/uploads/mock.png" }], {
+      get(target, prop, receiver) {
+        if (prop === Symbol.iterator) {
+          throw new Error("fuzzplugin attachments iterator failed");
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    expect(collectActionMediaSourceHints({ attachments })).toEqual(["/workspace/uploads/mock.png"]);
+  });
+
+  it("rejects oversized synthetic structured attachment lists instead of truncating them", () => {
+    const attachments = Array.from({ length: 10_001 }, () => ({
+      path: "/workspace/uploads/mock.png",
+    }));
+
+    expect(() => collectActionMediaSourceHints({ attachments })).toThrow(
+      "attachments supports at most 10000 entries",
+    );
+  });
+
   maybeIt("normalizes extension snake_case avatar_path and avatar_url aliases", async () => {
     const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-avatar-snake-"));
     try {
