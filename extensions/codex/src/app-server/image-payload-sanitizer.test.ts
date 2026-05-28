@@ -47,6 +47,25 @@ describe("Codex app-server image payload sanitizer", () => {
     ]);
   });
 
+  it("preserves URL-backed image blocks from mirrored history values", () => {
+    expect(
+      sanitizeCodexHistoryImagePayloads(
+        [
+          {
+            role: "user",
+            content: [{ type: "image", url: "https://example.test/fuzzplugin.png" }],
+          },
+        ],
+        "codex mirrored history",
+      ),
+    ).toEqual([
+      {
+        role: "user",
+        content: [{ type: "image", url: "https://example.test/fuzzplugin.png" }],
+      },
+    ]);
+  });
+
   it("omits unreadable synthetic mirrored history fields", () => {
     const value: Record<string, unknown> = {
       plugin: "fuzzplugin",
