@@ -56,6 +56,150 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     }
   });
 
+  it("copies provider tool arrays before compatibility traversal", () => {
+    const tools = [
+      {
+        name: "fuzz_move_delta",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            angle: {
+              type: "string",
+              maxLength: 32,
+            },
+          },
+        },
+      },
+    ] as never;
+    const geminiCtx = (entries: unknown) =>
+      ({
+        provider: "gemini",
+        modelId: "gemini-3-pro",
+        modelApi: "gemini",
+        tools: entries,
+      }) as never;
+
+    const normalized = normalizeGeminiToolSchemas(
+      geminiCtx(
+        withUnreadableArrayMethod(
+          withUnreadableArrayMethod(tools, "map", "fuzzplugin provider tool map read failed"),
+          Symbol.iterator,
+          "fuzzplugin provider tool iterator read failed",
+        ),
+      ),
+    );
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        angle: {
+          type: "string",
+        },
+      },
+    });
+    expect(
+      inspectGeminiToolSchemas(
+        geminiCtx(
+          withUnreadableArrayMethod(tools, "flatMap", "fuzzplugin provider tool scan failed"),
+        ),
+      ),
+    ).toEqual([
+      {
+        toolName: "fuzz_move_delta",
+        toolIndex: 0,
+        violations: ["fuzz_move_delta.parameters.properties.angle.maxLength"],
+      },
+    ]);
+  });
+
+  it("copies schema arrays before provider compatibility traversal", () => {
+    const unionVariants = [
+      { const: "alpha", type: "string" },
+      { const: "beta", type: "string" },
+    ];
+    const tools = [
+      {
+        name: "fuzz_move_delta",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            mode: {
+              anyOf: withUnreadableArrayMethod(
+                withUnreadableArrayMethod(
+                  unionVariants,
+                  "map",
+                  "fuzzplugin schema union map read failed",
+                ),
+                Symbol.iterator,
+                "fuzzplugin schema union iterator read failed",
+              ),
+            },
+          },
+        },
+      },
+    ] as never;
+
+    const normalized = normalizeDeepSeekToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      tools,
+    } as never);
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["alpha", "beta"],
+        },
+      },
+    });
+  });
+
+  it("omits unreadable schema unions before DeepSeek compatibility traversal", () => {
+    const tools = [
+      {
+        name: "fuzz_move_delta",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            mode: {
+              type: "string",
+              anyOf: new Proxy([{ const: "alpha", type: "string" }], {
+                get(target, property, receiver) {
+                  if (property === "0") {
+                    throw new Error("fuzzplugin DeepSeek union entry read failed");
+                  }
+                  return Reflect.get(target, property, receiver);
+                },
+              }),
+            },
+          },
+        },
+      },
+    ] as never;
+
+    const normalized = normalizeDeepSeekToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      tools,
+    } as never);
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+        },
+      },
+    });
+  });
+
   it("collapses anyOf and oneOf unions for the deepseek family", () => {
     const hooks = buildProviderToolCompatFamilyHooks("deepseek");
     const tools = [
@@ -516,3 +660,14 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     expect(diagnostics).toStrictEqual([]);
   });
 });
+
+function withUnreadableArrayMethod<T>(values: T[], method: PropertyKey, message: string): T[] {
+  return new Proxy(values, {
+    get(target, property, receiver) {
+      if (property === method) {
+        throw new Error(message);
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}

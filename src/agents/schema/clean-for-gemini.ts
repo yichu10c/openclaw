@@ -67,8 +67,12 @@ function tryFlattenLiteralAnyOf(variants: unknown[]): { type: string; enum: unkn
     let literalValue: unknown;
     if ("const" in v) {
       literalValue = v.const;
-    } else if (Array.isArray(v.enum) && v.enum.length === 1) {
-      literalValue = v.enum[0];
+    } else if (Array.isArray(v.enum)) {
+      const enumEntries = copyArrayEntries(v.enum);
+      if (!enumEntries || enumEntries.length !== 1) {
+        return null;
+      }
+      literalValue = enumEntries[0];
     } else {
       return null;
     }
@@ -100,14 +104,16 @@ function isNullSchema(variant: unknown): boolean {
   if ("const" in record && record.const === null) {
     return true;
   }
-  if (Array.isArray(record.enum) && record.enum.length === 1) {
-    return record.enum[0] === null;
+  if (Array.isArray(record.enum)) {
+    const enumEntries = copyArrayEntries(record.enum);
+    return enumEntries?.length === 1 && enumEntries[0] === null;
   }
   const typeValue = record.type;
   if (typeValue === "null") {
     return true;
   }
-  if (Array.isArray(typeValue) && typeValue.length === 1 && typeValue[0] === "null") {
+  const typeEntries = Array.isArray(typeValue) ? copyArrayEntries(typeValue) : undefined;
+  if (typeEntries?.length === 1 && typeEntries[0] === "null") {
     return true;
   }
   return false;
@@ -232,7 +238,12 @@ function sanitizeRequiredFields(schema: Record<string, unknown>): Record<string,
   }
 
   const properties = schema.properties as Record<string, unknown>;
-  const required = schema.required.filter(
+  const requiredEntries = copyArrayEntries(schema.required);
+  if (!requiredEntries) {
+    delete schema.required;
+    return schema;
+  }
+  const required = requiredEntries.filter(
     (key): key is string => typeof key === "string" && Object.hasOwn(properties, key),
   );
 
@@ -261,6 +272,15 @@ function cleanSchemaMapForGemini(
   );
 }
 
+function cleanSchemaArrayForGemini(
+  value: unknown[],
+  defs: SchemaDefs | undefined,
+  refStack: Set<string> | undefined,
+): unknown[] | undefined {
+  const entries = copyArrayEntries(value);
+  return entries?.map((entry) => cleanSchemaForGeminiWithDefs(entry, defs, refStack));
+}
+
 function cleanDependenciesForGemini(
   value: unknown,
   defs: SchemaDefs | undefined,
@@ -272,7 +292,9 @@ function cleanDependenciesForGemini(
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
       key,
-      Array.isArray(entry) ? entry : cleanSchemaForGeminiWithDefs(entry, defs, refStack),
+      Array.isArray(entry)
+        ? (copyArrayEntries(entry) ?? [])
+        : cleanSchemaForGeminiWithDefs(entry, defs, refStack),
     ]),
   );
 }
@@ -297,7 +319,8 @@ function cleanSchemaForGeminiWithDefs(
     return schema;
   }
   if (Array.isArray(schema)) {
-    return schema.map((item) => cleanSchemaForGeminiWithDefs(item, defs, refStack));
+    const entries = cleanSchemaArrayForGemini(schema, defs, refStack);
+    return entries ?? [];
   }
 
   const obj = schema as Record<string, unknown>;
@@ -331,29 +354,27 @@ function cleanSchemaForGeminiWithDefs(
     return result;
   }
 
-  const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
-  const hasOneOf = "oneOf" in obj && Array.isArray(obj.oneOf);
-  let cleanedAnyOf = hasAnyOf
-    ? (obj.anyOf as unknown[]).map((variant) =>
-        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
-      )
-    : undefined;
-  let cleanedOneOf = hasOneOf
-    ? (obj.oneOf as unknown[]).map((variant) =>
-        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
-      )
-    : undefined;
+  let cleanedAnyOf =
+    "anyOf" in obj && Array.isArray(obj.anyOf)
+      ? cleanSchemaArrayForGemini(obj.anyOf as unknown[], nextDefs, refStack)
+      : undefined;
+  const hasAnyOf = cleanedAnyOf !== undefined;
+  let cleanedOneOf =
+    "oneOf" in obj && Array.isArray(obj.oneOf)
+      ? cleanSchemaArrayForGemini(obj.oneOf as unknown[], nextDefs, refStack)
+      : undefined;
+  const hasOneOf = cleanedOneOf !== undefined;
 
-  if (hasAnyOf) {
-    const simplified = simplifyUnionVariants({ obj, variants: cleanedAnyOf ?? [] });
+  if (cleanedAnyOf !== undefined) {
+    const simplified = simplifyUnionVariants({ obj, variants: cleanedAnyOf });
     cleanedAnyOf = simplified.variants;
     if ("simplified" in simplified) {
       return simplified.simplified;
     }
   }
 
-  if (hasOneOf) {
-    const simplified = simplifyUnionVariants({ obj, variants: cleanedOneOf ?? [] });
+  if (cleanedOneOf !== undefined) {
+    const simplified = simplifyUnionVariants({ obj, variants: cleanedOneOf });
     cleanedOneOf = simplified.variants;
     if ("simplified" in simplified) {
       return simplified.simplified;
@@ -373,20 +394,24 @@ function cleanSchemaForGeminiWithDefs(
     }
 
     // Google's schema validator rejects `"required": []` — omit empty arrays.
-    if (key === "required" && Array.isArray(value) && value.length === 0) {
+    if (key === "required" && Array.isArray(value)) {
+      const requiredEntries = copyArrayEntries(value);
+      if (!requiredEntries || requiredEntries.length === 0) {
+        continue;
+      }
+      cleaned.required = requiredEntries;
       continue;
     }
 
     if (key === "type" && (hasAnyOf || hasOneOf)) {
       continue;
     }
-    if (
-      key === "type" &&
-      Array.isArray(value) &&
-      value.every((entry) => typeof entry === "string")
-    ) {
-      const types = value.filter((entry) => entry !== "null");
-      cleaned.type = types.length === 1 ? types[0] : types;
+    if (key === "type" && Array.isArray(value)) {
+      const typeEntries = copyArrayEntries(value);
+      if (typeEntries?.every((entry) => typeof entry === "string")) {
+        const types = typeEntries.filter((entry) => entry !== "null");
+        cleaned.type = types.length === 1 ? types[0] : types;
+      }
       continue;
     }
 
@@ -406,28 +431,33 @@ function cleanSchemaForGeminiWithDefs(
       }
     } else if (key === "items" && value) {
       if (Array.isArray(value)) {
-        cleaned[key] = value.map((entry) =>
-          cleanSchemaForGeminiWithDefs(entry, nextDefs, refStack),
-        );
+        const entries = cleanSchemaArrayForGemini(value, nextDefs, refStack);
+        if (entries) {
+          cleaned[key] = entries;
+        }
       } else if (typeof value === "object") {
         cleaned[key] = cleanSchemaForGeminiWithDefs(value, nextDefs, refStack);
       } else {
         cleaned[key] = value;
       }
     } else if (key === "anyOf" && Array.isArray(value)) {
-      cleaned[key] =
-        cleanedAnyOf ??
-        value.map((variant) => cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack));
+      if (hasAnyOf) {
+        cleaned[key] = cleanedAnyOf;
+      }
     } else if (key === "oneOf" && Array.isArray(value)) {
-      cleaned[key] =
-        cleanedOneOf ??
-        value.map((variant) => cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack));
+      if (hasOneOf) {
+        cleaned[key] = cleanedOneOf;
+      }
     } else if (key === "allOf" && Array.isArray(value)) {
-      cleaned[key] = value.map((variant) =>
-        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
-      );
+      const entries = cleanSchemaArrayForGemini(value, nextDefs, refStack);
+      if (entries) {
+        cleaned[key] = entries;
+      }
     } else if (key === "prefixItems" && Array.isArray(value)) {
-      cleaned[key] = value.map((entry) => cleanSchemaForGeminiWithDefs(entry, nextDefs, refStack));
+      const entries = cleanSchemaArrayForGemini(value, nextDefs, refStack);
+      if (entries) {
+        cleaned[key] = entries;
+      }
     } else if (key === "dependentSchemas") {
       cleaned[key] = cleanSchemaMapForGemini(value, nextDefs, refStack);
     } else if (key === "dependencies") {
@@ -501,9 +531,23 @@ export function cleanSchemaForGemini(schema: unknown): TSchema {
     return schema as TSchema;
   }
   if (Array.isArray(schema)) {
-    return schema.map(cleanSchemaForGemini) as TSchema;
+    const entries = copyArrayEntries(schema);
+    return (entries ? entries.map(cleanSchemaForGemini) : []) as TSchema;
   }
 
   const defs = extendSchemaDefs(undefined, schema as Record<string, unknown>);
   return cleanSchemaForGeminiWithDefs(schema, defs, undefined) as TSchema;
+}
+
+function copyArrayEntries<T>(values: readonly T[]): T[] | undefined {
+  try {
+    const entries: T[] = [];
+    const length = values.length;
+    for (let index = 0; index < length; index += 1) {
+      entries.push(values[index]);
+    }
+    return entries;
+  } catch {
+    return undefined;
+  }
 }

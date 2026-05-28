@@ -291,4 +291,81 @@ describe("cleanSchemaForGemini", () => {
     expect(cleanedConditionalThen?.properties?.next?.maxLength).toBeUndefined();
     expect(cleaned.prefixItems?.[0]?.minLength).toBeUndefined();
   });
+
+  it("copies schema arrays before cleaning Gemini unions", () => {
+    const cleaned = cleanSchemaForGemini({
+      description: "Synthetic plugin movement mode",
+      anyOf: withUnreadableArrayMethod(
+        withUnreadableArrayMethod(
+          [
+            { const: "alpha", type: "string" },
+            { const: "beta", type: "string" },
+          ],
+          "map",
+          "fuzzplugin Gemini union map read failed",
+        ),
+        Symbol.iterator,
+        "fuzzplugin Gemini union iterator read failed",
+      ),
+    }) as Record<string, unknown>;
+
+    expect(cleaned).toEqual({
+      description: "Synthetic plugin movement mode",
+      type: "string",
+      enum: ["alpha", "beta"],
+    });
+  });
+
+  it("omits unreadable Gemini unions without erasing the outer schema", () => {
+    const cleaned = cleanSchemaForGemini({
+      type: "string",
+      description: "Synthetic plugin movement mode",
+      anyOf: new Proxy([{ const: "alpha", type: "string" }], {
+        get(target, property, receiver) {
+          if (property === "0") {
+            throw new Error("fuzzplugin Gemini union entry read failed");
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      }),
+    }) as Record<string, unknown>;
+
+    expect(cleaned).toEqual({
+      type: "string",
+      description: "Synthetic plugin movement mode",
+    });
+  });
+
+  it("omits unreadable Gemini tuple arrays without leaking the original proxy", () => {
+    const tuple = new Proxy([{ type: "string", maxLength: 8 }], {
+      get(target, property, receiver) {
+        if (property === "0") {
+          throw new Error("fuzzplugin Gemini tuple entry read failed");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const cleaned = cleanSchemaForGemini({
+      type: "array",
+      items: tuple,
+      prefixItems: tuple,
+      allOf: tuple,
+    }) as Record<string, unknown>;
+
+    expect(cleaned).toEqual({
+      type: "array",
+    });
+  });
 });
+
+function withUnreadableArrayMethod<T>(values: T[], method: PropertyKey, message: string): T[] {
+  return new Proxy(values, {
+    get(target, property, receiver) {
+      if (property === method) {
+        throw new Error(message);
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}

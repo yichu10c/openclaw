@@ -22,7 +22,8 @@ export function findUnsupportedSchemaKeywords(
     return [];
   }
   if (Array.isArray(schema)) {
-    return schema.flatMap((item, index) =>
+    const entries = copyArrayEntries(schema);
+    return (entries ?? []).flatMap((item, index) =>
       findUnsupportedSchemaKeywords(item, `${path}[${index}]`, unsupportedKeywords),
     );
   }
@@ -58,21 +59,29 @@ export function findUnsupportedSchemaKeywords(
 export function normalizeGeminiToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
-  return ctx.tools.map((tool) => {
+  const normalized: AnyAgentTool[] = [];
+  const tools = copyArrayEntries(ctx.tools);
+  if (!tools) {
+    return ctx.tools;
+  }
+  for (const tool of tools) {
     if (!tool.parameters || typeof tool.parameters !== "object") {
-      return tool;
+      normalized.push(tool);
+      continue;
     }
-    return {
+    normalized.push({
       ...tool,
       parameters: cleanSchemaForGemini(tool.parameters),
-    };
-  });
+    });
+  }
+  return normalized;
 }
 
 export function inspectGeminiToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  return ctx.tools.flatMap((tool, toolIndex) => {
+  const tools = copyArrayEntries(ctx.tools);
+  return (tools ?? []).flatMap((tool, toolIndex) => {
     const violations = findUnsupportedSchemaKeywords(
       tool.parameters,
       `${tool.name}.parameters`,
@@ -91,21 +100,29 @@ export function normalizeOpenAIToolSchemas(
   if (!shouldApplyOpenAIToolCompat(ctx)) {
     return ctx.tools;
   }
-  return ctx.tools.map((tool) => {
+  const normalized: AnyAgentTool[] = [];
+  const tools = copyArrayEntries(ctx.tools);
+  if (!tools) {
+    return ctx.tools;
+  }
+  for (const tool of tools) {
     if (tool.parameters == null) {
-      return {
+      normalized.push({
         ...tool,
         parameters: normalizeOpenAIStrictCompatSchema({}),
-      };
+      });
+      continue;
     }
     if (typeof tool.parameters !== "object") {
-      return tool;
+      normalized.push(tool);
+      continue;
     }
-    return {
+    normalized.push({
       ...tool,
       parameters: normalizeOpenAIStrictCompatSchema(tool.parameters),
-    };
-  });
+    });
+  }
+  return normalized;
 }
 
 function normalizeOpenAIStrictCompatSchema(schema: unknown): TSchema {
@@ -190,8 +207,12 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
   options: NormalizeOpenAIStrictCompatOptions,
 ): unknown {
   if (Array.isArray(schema)) {
+    const entries = copyArrayEntries(schema);
+    if (!entries) {
+      return schema;
+    }
     let changed = false;
-    const normalized = schema.map((entry) => {
+    const normalized = entries.map((entry) => {
       const next = normalizeOpenAIStrictCompatSchemaRecursive(entry, {
         promoteEmptyObject: false,
       });
@@ -278,7 +299,8 @@ export function findOpenAIStrictSchemaViolations(
     if (options?.requireObjectRoot) {
       return [`${path}.type`];
     }
-    return schema.flatMap((item, index) =>
+    const entries = copyArrayEntries(schema);
+    return (entries ?? []).flatMap((item, index) =>
       findOpenAIStrictSchemaViolations(item, `${path}[${index}]`),
     );
   }
@@ -363,19 +385,25 @@ function isNullSchemaVariant(schema: unknown): boolean {
   if (record.type === "null") {
     return true;
   }
-  if (Array.isArray(record.type) && record.type.length === 1 && record.type[0] === "null") {
+  const typeEntries = Array.isArray(record.type) ? copyArrayEntries(record.type) : undefined;
+  if (typeEntries?.length === 1 && typeEntries[0] === "null") {
     return true;
   }
   if ("const" in record && record.const === null) {
     return true;
   }
-  return Array.isArray(record.enum) && record.enum.length === 1 && record.enum[0] === null;
+  const enumEntries = Array.isArray(record.enum) ? copyArrayEntries(record.enum) : undefined;
+  return enumEntries?.length === 1 && enumEntries[0] === null;
 }
 
 function normalizeDeepSeekSchema(schema: unknown): unknown {
   if (Array.isArray(schema)) {
+    const entries = copyArrayEntries(schema);
+    if (!entries) {
+      return schema;
+    }
     let changed = false;
-    const normalized = schema.map((entry) => {
+    const normalized = entries.map((entry) => {
       const next = normalizeDeepSeekSchema(entry);
       changed ||= next !== entry;
       return next;
@@ -412,7 +440,11 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
   }
 
   const variants = record[unionKey] as unknown[];
-  const normalizedVariants = variants.map((entry) => normalizeDeepSeekSchema(entry));
+  const variantEntries = copyArrayEntries(variants);
+  if (!variantEntries) {
+    return normalized;
+  }
+  const normalizedVariants = variantEntries.map((entry) => normalizeDeepSeekSchema(entry));
   const nonNullVariants = normalizedVariants.filter((entry) => !isNullSchemaVariant(entry));
   const hasNullVariant = nonNullVariants.length < normalizedVariants.length;
 
@@ -459,24 +491,34 @@ function isStringConstVariant(entry: unknown): entry is { const: string } {
 export function normalizeDeepSeekToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
-  return ctx.tools.map((tool) => {
+  const normalized: AnyAgentTool[] = [];
+  const tools = copyArrayEntries(ctx.tools);
+  if (!tools) {
+    return ctx.tools;
+  }
+  for (const tool of tools) {
     if (!tool.parameters || typeof tool.parameters !== "object") {
-      return tool;
+      normalized.push(tool);
+      continue;
     }
     const parameters = normalizeDeepSeekSchema(tool.parameters);
-    return parameters === tool.parameters
-      ? tool
-      : {
-          ...tool,
-          parameters: parameters as TSchema,
-        };
-  });
+    normalized.push(
+      parameters === tool.parameters
+        ? tool
+        : {
+            ...tool,
+            parameters: parameters as TSchema,
+          },
+    );
+  }
+  return normalized;
 }
 
 export function inspectDeepSeekToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  return ctx.tools.flatMap((tool, toolIndex) => {
+  const tools = copyArrayEntries(ctx.tools);
+  return (tools ?? []).flatMap((tool, toolIndex) => {
     const violations = findUnsupportedSchemaKeywords(
       tool.parameters,
       `${tool.name}.parameters`,
@@ -513,4 +555,17 @@ export function buildProviderToolCompatFamilyHooks(family: ProviderToolCompatFam
       };
   }
   throw new Error("Unsupported provider tool compatibility family");
+}
+
+function copyArrayEntries<T>(values: readonly T[]): T[] | undefined {
+  try {
+    const entries: T[] = [];
+    const length = values.length;
+    for (let index = 0; index < length; index += 1) {
+      entries.push(values[index]);
+    }
+    return entries;
+  } catch {
+    return undefined;
+  }
 }
