@@ -33,6 +33,45 @@ export type PrivateNetworkOptInInput =
         | undefined;
     };
 
+function readRecordField(record: Record<string, unknown>, key: string): unknown {
+  try {
+    return record[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function hasOwnRecordField(record: Record<string, unknown>, key: string): boolean {
+  try {
+    return Object.prototype.hasOwnProperty.call(record, key);
+  } catch {
+    return false;
+  }
+}
+
+function readRecordEntries(record: Record<string, unknown>): Array<[string, unknown]> | undefined {
+  let keys: string[];
+  try {
+    keys = Object.keys(record);
+  } catch {
+    return undefined;
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, record[key]]);
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
+function copyRecord(record: Record<string, unknown>): Record<string, unknown> | undefined {
+  const entries = readRecordEntries(record);
+  return entries ? Object.fromEntries(entries) : undefined;
+}
+
 export function isPrivateNetworkOptInEnabled(input: PrivateNetworkOptInInput): boolean {
   if (input === true) {
     return true;
@@ -41,12 +80,15 @@ export function isPrivateNetworkOptInEnabled(input: PrivateNetworkOptInInput): b
   if (!record) {
     return false;
   }
-  const network = asNullableRecord(record.network);
+  const network = asNullableRecord(readRecordField(record, "network"));
+  const networkAllowsPrivateAccess = network
+    ? readRecordField(network, "allowPrivateNetwork") === true ||
+      readRecordField(network, "dangerouslyAllowPrivateNetwork") === true
+    : false;
   return (
-    record.allowPrivateNetwork === true ||
-    record.dangerouslyAllowPrivateNetwork === true ||
-    network?.allowPrivateNetwork === true ||
-    network?.dangerouslyAllowPrivateNetwork === true
+    readRecordField(record, "allowPrivateNetwork") === true ||
+    readRecordField(record, "dangerouslyAllowPrivateNetwork") === true ||
+    networkAllowsPrivateAccess
   );
 }
 
@@ -64,7 +106,7 @@ export function ssrfPolicyFromDangerouslyAllowPrivateNetwork(
 
 export function hasLegacyFlatAllowPrivateNetworkAlias(value: unknown): boolean {
   const entry = asNullableRecord(value);
-  return Boolean(entry && Object.prototype.hasOwnProperty.call(entry, "allowPrivateNetwork"));
+  return Boolean(entry && hasOwnRecordField(entry, "allowPrivateNetwork"));
 }
 
 export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
@@ -76,10 +118,17 @@ export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
     return { entry: params.entry, changed: false };
   }
 
-  const legacyAllowPrivateNetwork = params.entry.allowPrivateNetwork;
-  const currentNetworkRecord = asNullableRecord(params.entry.network);
-  const currentNetwork = currentNetworkRecord ? { ...currentNetworkRecord } : {};
-  const currentDangerousAllowPrivateNetwork = currentNetwork.dangerouslyAllowPrivateNetwork;
+  const legacyAllowPrivateNetwork = readRecordField(params.entry, "allowPrivateNetwork");
+  const currentNetworkRecord = asNullableRecord(readRecordField(params.entry, "network"));
+  const currentNetwork = currentNetworkRecord ? copyRecord(currentNetworkRecord) : {};
+  const nextEntry = copyRecord(params.entry);
+  if (!currentNetwork || !nextEntry) {
+    return { entry: params.entry, changed: false };
+  }
+  const currentDangerousAllowPrivateNetwork = readRecordField(
+    currentNetwork,
+    "dangerouslyAllowPrivateNetwork",
+  );
 
   let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
   if (typeof currentDangerousAllowPrivateNetwork === "boolean") {
@@ -96,7 +145,6 @@ export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
     currentNetwork.dangerouslyAllowPrivateNetwork = resolvedDangerousAllowPrivateNetwork;
   }
 
-  const nextEntry = { ...params.entry };
   delete nextEntry.allowPrivateNetwork;
   if (Object.keys(currentNetwork).length > 0) {
     nextEntry.network = currentNetwork;
@@ -112,9 +160,10 @@ export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
 
 function hasLegacyAllowPrivateNetworkInAccounts(value: unknown): boolean {
   const accounts = asNullableRecord(value);
+  const entries = accounts ? readRecordEntries(accounts) : undefined;
   return Boolean(
-    accounts &&
-    Object.values(accounts).some((account) =>
+    entries &&
+    entries.some(([, account]) =>
       hasLegacyFlatAllowPrivateNetworkAlias(asNullableRecord(account) ?? {}),
     ),
   );
@@ -139,8 +188,10 @@ export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: s
       },
     ],
     normalizeCompatibilityConfig: ({ cfg }) => {
-      const channels = asNullableRecord(cfg.channels);
-      const channelEntry = asNullableRecord(channels?.[params.channelKey]);
+      const channels = asNullableRecord(readRecordField(cfg, "channels"));
+      const channelEntry = asNullableRecord(
+        channels ? readRecordField(channels, params.channelKey) : undefined,
+      );
       if (!channelEntry) {
         return { config: cfg, changes: [] };
       }
@@ -157,11 +208,15 @@ export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: s
       updatedChannel = topLevel.entry;
       changed = changed || topLevel.changed;
 
-      const accounts = asNullableRecord(updatedChannel.accounts);
+      const accounts = asNullableRecord(readRecordField(updatedChannel, "accounts"));
       if (accounts) {
         let accountsChanged = false;
-        const nextAccounts: Record<string, unknown> = { ...accounts };
-        for (const [accountId, accountValue] of Object.entries(accounts)) {
+        const nextAccounts = copyRecord(accounts);
+        const accountEntries = readRecordEntries(accounts);
+        if (!nextAccounts || !accountEntries) {
+          return { config: cfg, changes: [] };
+        }
+        for (const [accountId, accountValue] of accountEntries) {
           const account = asNullableRecord(accountValue);
           if (!account) {
             continue;
@@ -178,7 +233,11 @@ export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: s
           accountsChanged = true;
         }
         if (accountsChanged) {
-          updatedChannel = { ...updatedChannel, accounts: nextAccounts };
+          const nextChannel = copyRecord(updatedChannel);
+          if (!nextChannel) {
+            return { config: cfg, changes: [] };
+          }
+          updatedChannel = { ...nextChannel, accounts: nextAccounts };
           changed = true;
         }
       }
@@ -187,16 +246,14 @@ export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: s
         return { config: cfg, changes: [] };
       }
 
-      return {
-        config: {
-          ...cfg,
-          channels: {
-            ...cfg.channels,
-            [params.channelKey]: updatedChannel,
-          } as OpenClawConfig["channels"],
-        },
-        changes,
-      };
+      const nextConfig = copyRecord(cfg);
+      const nextChannels = channels ? copyRecord(channels) : {};
+      if (!nextConfig || !nextChannels) {
+        return { config: cfg, changes: [] };
+      }
+      nextChannels[params.channelKey] = updatedChannel;
+      nextConfig.channels = nextChannels as OpenClawConfig["channels"];
+      return { config: nextConfig as OpenClawConfig, changes };
     },
   };
 }

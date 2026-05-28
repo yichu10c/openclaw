@@ -113,6 +113,37 @@ describe("isPrivateNetworkOptInEnabled", () => {
   ])("$name", ({ input, expected }) => {
     expect(isPrivateNetworkOptInEnabled(input)).toBe(expected);
   });
+
+  it("bounds hostile private-network opt-in config reads", () => {
+    const unreadableNetwork = new Proxy(
+      {},
+      {
+        get(_target, property) {
+          if (property === "network") {
+            throw new Error("fuzzplugin network getter");
+          }
+          return undefined;
+        },
+      },
+    );
+    const unreadableLegacyAlias = new Proxy(
+      {},
+      {
+        get(_target, property) {
+          if (property === "allowPrivateNetwork") {
+            throw new Error("fuzzplugin allow getter");
+          }
+          if (property === "dangerouslyAllowPrivateNetwork") {
+            return true;
+          }
+          return undefined;
+        },
+      },
+    );
+
+    expect(isPrivateNetworkOptInEnabled(unreadableNetwork)).toBe(false);
+    expect(isPrivateNetworkOptInEnabled(unreadableLegacyAlias)).toBe(true);
+  });
 });
 
 describe("ssrfPolicyFromPrivateNetworkOptIn", () => {
@@ -134,6 +165,25 @@ describe("ssrfPolicyFromPrivateNetworkOptIn", () => {
     },
   ])("$name", ({ input, expected }) => {
     expect(ssrfPolicyFromPrivateNetworkOptIn(input)).toEqual(expected);
+  });
+
+  it("keeps policy construction bounded for hostile opt-in config", () => {
+    const config = new Proxy(
+      {},
+      {
+        get(_target, property) {
+          if (property === "allowPrivateNetwork") {
+            throw new Error("fuzzplugin allow getter");
+          }
+          if (property === "dangerouslyAllowPrivateNetwork") {
+            return true;
+          }
+          return undefined;
+        },
+      },
+    );
+
+    expect(ssrfPolicyFromPrivateNetworkOptIn(config)).toEqual({ allowPrivateNetwork: true });
   });
 });
 
@@ -236,6 +286,40 @@ describe("legacy private-network alias helpers", () => {
       },
     });
     expect(changes[0]).toContain("(true)");
+  });
+
+  it("bounds hostile legacy private-network migration reads", () => {
+    const changes: string[] = [];
+    const entry = new Proxy(
+      { allowPrivateNetwork: true, label: "mockplugin" },
+      {
+        get(target, property, receiver) {
+          if (property === "network") {
+            throw new Error("fuzzplugin network getter");
+          }
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+
+    const migrated = migrateLegacyFlatAllowPrivateNetworkAlias({
+      entry,
+      pathPrefix: "channels.mockplugin",
+      changes,
+    });
+
+    expect(migrated).toEqual({
+      changed: true,
+      entry: {
+        label: "mockplugin",
+        network: {
+          dangerouslyAllowPrivateNetwork: true,
+        },
+      },
+    });
+    expect(changes).toEqual([
+      "Moved channels.mockplugin.allowPrivateNetwork → channels.mockplugin.network.dangerouslyAllowPrivateNetwork (true).",
+    ]);
   });
 });
 
