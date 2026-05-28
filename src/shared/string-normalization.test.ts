@@ -6,6 +6,7 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   normalizeStringEntries,
   normalizeStringEntriesLower,
+  normalizeTrimmedStringList,
   normalizeUniqueSingleOrTrimmedStringList,
   normalizeUniqueStringEntries,
   normalizeUniqueStringEntriesLower,
@@ -25,6 +26,46 @@ describe("shared/string-normalization", () => {
     expect(normalizeStringEntries(undefined)).toStrictEqual([]);
   });
 
+  it("copies synthetic plugin string arrays without trusting array methods", () => {
+    const methodHostile = new Proxy([" owner ", "", "admin"], {
+      get(target, key, receiver) {
+        if (key === "map" || key === "flatMap" || key === Symbol.iterator) {
+          throw new Error("fuzzplugin string array method failed");
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const entryHostile = ["keep", "drop", "later"];
+    Object.defineProperty(entryHostile, "1", {
+      get() {
+        throw new Error("mockplugin string entry failed");
+      },
+    });
+
+    expect(normalizeStringEntries(methodHostile)).toEqual(["owner", "admin"]);
+    expect(normalizeTrimmedStringList(methodHostile)).toEqual(["owner", "admin"]);
+    expect(normalizeStringEntries(entryHostile)).toEqual(["keep", "later"]);
+  });
+
+  it("treats unreadable synthetic plugin string lists as absent", () => {
+    const lengthHostile = new Proxy([], {
+      get(target, key, receiver) {
+        if (key === "length") {
+          throw new Error("fuzzplugin string array length failed");
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const stringHostile = {
+      toString() {
+        throw new Error("mockplugin string coercion failed");
+      },
+    };
+
+    expect(normalizeStringEntries(lengthHostile)).toStrictEqual([]);
+    expect(normalizeStringEntries([stringHostile, " ok "])).toEqual(["ok"]);
+  });
+
   it("normalizes mixed allow-list entries to lowercase", () => {
     expect(normalizeStringEntriesLower([" A ", "MiXeD", 7])).toEqual(["a", "mixed", "7"]);
   });
@@ -39,6 +80,25 @@ describe("shared/string-normalization", () => {
 
   it("normalizes unique string entries", () => {
     expect(normalizeUniqueStringEntries([" b ", "a", "b", "", 4, "a"])).toEqual(["b", "a", "4"]);
+  });
+
+  it("keeps readable unique entries from hostile synthetic plugin iterables", () => {
+    let index = 0;
+    const iterable = {
+      [Symbol.iterator]() {
+        return {
+          next() {
+            index += 1;
+            if (index === 1) {
+              return { value: " owner ", done: false };
+            }
+            throw new Error("fuzzplugin string iterator failed");
+          },
+        };
+      },
+    };
+
+    expect(normalizeUniqueStringEntries(iterable)).toEqual(["owner"]);
   });
 
   it("normalizes unique lowercase string entries", () => {

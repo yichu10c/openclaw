@@ -1,7 +1,70 @@
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
+function copyArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length = 0;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    let hasEntry = true;
+    try {
+      hasEntry = index in value;
+    } catch {
+      hasEntry = true;
+    }
+    if (!hasEntry) {
+      continue;
+    }
+    try {
+      entries.push(value[index]);
+    } catch {
+      // Unreadable config/list entries are treated as absent.
+    }
+  }
+  return entries;
+}
+
+function copyIterableEntries(values?: Iterable<unknown>): unknown[] {
+  if (!values) {
+    return [];
+  }
+  if (Array.isArray(values)) {
+    return copyArrayEntries(values);
+  }
+  const entries: unknown[] = [];
+  try {
+    for (const entry of values) {
+      entries.push(entry);
+    }
+  } catch {
+    // Keep entries collected before an optional plugin iterable failed.
+  }
+  return entries;
+}
+
+function normalizeStringEntry(entry: unknown): string {
+  try {
+    return normalizeOptionalString(String(entry)) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 export function normalizeStringEntries(list?: ReadonlyArray<unknown>) {
-  return (list ?? []).map((entry) => normalizeOptionalString(String(entry)) ?? "").filter(Boolean);
+  const normalized: string[] = [];
+  for (const entry of copyArrayEntries(list)) {
+    const value = normalizeStringEntry(entry);
+    if (value) {
+      normalized.push(value);
+    }
+  }
+  return normalized;
 }
 
 export function normalizeStringEntriesLower(list?: ReadonlyArray<unknown>) {
@@ -9,7 +72,7 @@ export function normalizeStringEntriesLower(list?: ReadonlyArray<unknown>) {
 }
 
 export function uniqueValues<T>(values: Iterable<T>): T[] {
-  return [...new Set(values)];
+  return [...new Set(copyIterableEntries(values) as T[])];
 }
 
 export function uniqueStrings(values: Iterable<string>): string[] {
@@ -23,13 +86,11 @@ export function sortUniqueStrings(values: Iterable<string>): string[] {
 }
 
 export function normalizeUniqueStringEntries(values?: Iterable<unknown>): string[] {
-  return uniqueStrings(normalizeStringEntries(values ? [...values] : undefined));
+  return uniqueStrings(normalizeStringEntries(copyIterableEntries(values)));
 }
 
 export function normalizeUniqueStringEntriesLower(values?: Iterable<unknown>): string[] {
-  return uniqueStrings(
-    normalizeStringEntriesLower(values ? [...values] : undefined).filter(Boolean),
-  );
+  return uniqueStrings(normalizeStringEntriesLower(copyIterableEntries(values)).filter(Boolean));
 }
 
 export function normalizeSortedUniqueStringEntries(values?: Iterable<unknown>): string[] {
@@ -40,10 +101,14 @@ export function normalizeTrimmedStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.flatMap((entry) => {
+  const entries: string[] = [];
+  for (const entry of copyArrayEntries(value)) {
     const normalized = normalizeOptionalString(entry);
-    return normalized ? [normalized] : [];
-  });
+    if (normalized) {
+      entries.push(normalized);
+    }
+  }
+  return entries;
 }
 
 export function normalizeUniqueTrimmedStringList(value: unknown): string[] {

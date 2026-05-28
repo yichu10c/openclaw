@@ -38,6 +38,24 @@ describe("mergeDmAllowFromSources", () => {
   ])("$name", ({ input, expected }) => {
     expect(mergeDmAllowFromSources(input)).toEqual(expected);
   });
+
+  it("copies synthetic plugin allowlists without trusting iterators", () => {
+    const allowFrom = new Proxy([" owner "], {
+      get(target, key, receiver) {
+        if (key === Symbol.iterator) {
+          throw new Error("fuzzplugin allowFrom iterator failed");
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+
+    expect(
+      mergeDmAllowFromSources({
+        allowFrom,
+        storeAllowFrom: [" store-owner "],
+      }),
+    ).toEqual(["owner", "store-owner"]);
+  });
 });
 
 describe("resolveGroupAllowFromSources", () => {
@@ -65,6 +83,24 @@ describe("resolveGroupAllowFromSources", () => {
         allowFrom: ["owner", "owner2"],
         groupAllowFrom: [],
         fallbackToAllowFrom: false,
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("fails closed when explicit synthetic plugin group allowlists are unreadable", () => {
+    const groupAllowFrom = new Proxy([], {
+      get(target, key, receiver) {
+        if (key === "length") {
+          throw new Error("mockplugin group allowFrom length failed");
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+
+    expect(
+      resolveGroupAllowFromSources({
+        allowFrom: [" owner "],
+        groupAllowFrom,
       }),
     ).toStrictEqual([]);
   });

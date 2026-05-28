@@ -26,6 +26,36 @@ export type CompiledAllowlist = {
   wildcard: boolean;
 };
 
+function copyArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length = 0;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    let hasEntry = true;
+    try {
+      hasEntry = index in value;
+    } catch {
+      hasEntry = true;
+    }
+    if (!hasEntry) {
+      continue;
+    }
+    try {
+      entries.push(value[index]);
+    } catch {
+      // Optional config allowlist entries that cannot be read are absent.
+    }
+  }
+  return entries;
+}
+
 export function formatAllowlistMatchMeta(
   match?: { matchKey?: string; matchSource?: string } | null,
 ): string {
@@ -33,7 +63,11 @@ export function formatAllowlistMatchMeta(
 }
 
 export function compileAllowlist(entries: ReadonlyArray<string>): CompiledAllowlist {
-  const set = new Set(entries.filter(Boolean));
+  const set = new Set(
+    copyArrayEntries(entries).filter(
+      (entry): entry is string => typeof entry === "string" && Boolean(entry),
+    ),
+  );
   return {
     set,
     wildcard: set.has("*"),
@@ -42,8 +76,14 @@ export function compileAllowlist(entries: ReadonlyArray<string>): CompiledAllowl
 
 function compileSimpleAllowlist(entries: ReadonlyArray<string | number>): CompiledAllowlist {
   return compileAllowlist(
-    entries
-      .map((entry) => normalizeOptionalLowercaseString(String(entry)))
+    copyArrayEntries(entries)
+      .map((entry) => {
+        try {
+          return normalizeOptionalLowercaseString(String(entry));
+        } catch {
+          return undefined;
+        }
+      })
       .filter((entry): entry is string => Boolean(entry)),
   );
 }

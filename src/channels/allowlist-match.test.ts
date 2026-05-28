@@ -47,6 +47,23 @@ describe("channels/allowlist-match", () => {
     });
   });
 
+  it("matches synthetic plugin allowlists without trusting array methods", () => {
+    const allowFrom = new Proxy(["alice"], {
+      get(target, key, receiver) {
+        if (key === "map") {
+          throw new Error("fuzzplugin allowlist map failed");
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+
+    expect(resolveAllowlistMatchSimple({ allowFrom, senderId: "alice" })).toEqual({
+      allowed: true,
+      matchKey: "alice",
+      matchSource: "id",
+    });
+  });
+
   it("recomputes candidate allowlist sets after in-place replacement", () => {
     const allowList = ["user:alice", "user:bob"];
 
@@ -81,5 +98,31 @@ describe("channels/allowlist-match", () => {
       matchKey: "user:mallory",
       matchSource: "prefixed-user",
     });
+  });
+
+  it("skips unreadable synthetic plugin candidate allowlist entries", () => {
+    const allowList = ["user:alice", "user:bob"];
+    Object.defineProperty(allowList, "1", {
+      get() {
+        throw new Error("mockplugin allowlist entry failed");
+      },
+    });
+
+    expect(
+      resolveAllowlistMatchByCandidates({
+        allowList,
+        candidates: [{ value: "user:alice", source: "prefixed-user" }],
+      }),
+    ).toEqual({
+      allowed: true,
+      matchKey: "user:alice",
+      matchSource: "prefixed-user",
+    });
+    expect(
+      resolveAllowlistMatchByCandidates({
+        allowList,
+        candidates: [{ value: "user:bob", source: "prefixed-user" }],
+      }),
+    ).toEqual({ allowed: false });
   });
 });
