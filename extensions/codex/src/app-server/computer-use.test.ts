@@ -233,6 +233,29 @@ describe("Codex Computer Use setup", () => {
     expectRequestMethodNotCalled(request, "plugin/install");
   });
 
+  it("installs when Computer Use marketplace array methods are unreadable", async () => {
+    const request = createComputerUseRequest({
+      installed: false,
+      unreadableMarketplaceArrayMethods: true,
+    });
+
+    const status = await installCodexComputerUse({
+      pluginConfig: { computerUse: { marketplaceName: "desktop-tools" } },
+      request,
+    });
+
+    expectStatusFields(status, {
+      ready: true,
+      reason: "ready",
+      marketplaceName: "desktop-tools",
+      tools: ["list_apps"],
+    });
+    expect(request).toHaveBeenCalledWith("plugin/install", {
+      marketplacePath: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+      pluginName: "computer-use",
+    });
+  });
+
   it("installs Computer Use from a configured marketplace source", async () => {
     const request = createComputerUseRequest({ installed: false });
 
@@ -607,6 +630,7 @@ describe("Codex Computer Use setup", () => {
 function createComputerUseRequest(params: {
   installed: boolean;
   enabled?: boolean;
+  unreadableMarketplaceArrayMethods?: boolean;
   marketplaceAvailableAfterListCalls?: number;
   unreadableMarketplaceAddName?: boolean;
   unreadableMcpToolKeys?: boolean;
@@ -640,17 +664,24 @@ function createComputerUseRequest(params: {
       pluginListCalls += 1;
       const marketplaceAvailable =
         pluginListCalls >= (params.marketplaceAvailableAfterListCalls ?? 1);
+      const marketplaces = marketplaceAvailable
+        ? [
+            {
+              name: "desktop-tools",
+              path: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
+              interface: null,
+              plugins: [pluginSummary(installed, "desktop-tools", enabled)],
+            },
+          ]
+        : [];
       return {
-        marketplaces: marketplaceAvailable
-          ? [
-              {
-                name: "desktop-tools",
-                path: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
-                interface: null,
-                plugins: [pluginSummary(installed, "desktop-tools", enabled)],
-              },
-            ]
-          : [],
+        marketplaces: params.unreadableMarketplaceArrayMethods
+          ? withUnreadableArrayMethod(
+              marketplaces,
+              "flatMap",
+              "fuzzplugin marketplaces iterator read failed",
+            )
+          : marketplaces,
         marketplaceLoadErrors: [],
         featuredPluginIds: [],
       };
@@ -968,6 +999,17 @@ function marketplaceEntry(marketplaceName: string, installed: boolean) {
     interface: null,
     plugins: [pluginSummary(installed, marketplaceName)],
   };
+}
+
+function withUnreadableArrayMethod<T>(values: T[], method: string, message: string): T[] {
+  return new Proxy(values, {
+    get(target, property, receiver) {
+      if (property === method) {
+        throw new Error(message);
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
 }
 
 function pluginSummary(

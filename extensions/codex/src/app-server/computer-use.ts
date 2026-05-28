@@ -810,7 +810,7 @@ function readArrayField(value: unknown, key: string): unknown[] {
   }
   try {
     const field = record[key];
-    return Array.isArray(field) ? field : [];
+    return Array.isArray(field) ? Array.from(field) : [];
   } catch {
     return [];
   }
