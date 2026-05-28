@@ -293,6 +293,73 @@ describe("provider wizard boundaries", () => {
     ]);
   });
 
+  it("resolves wizard choices without using source auth array methods", () => {
+    const auth = Object.assign(
+      [
+        {
+          id: "api-key",
+          label: "API key",
+          kind: "api_key",
+          wizard: {
+            choiceId: "fuzzplugin-api-key",
+            choiceLabel: "Fuzz Plugin API key",
+          },
+          run: vi.fn(),
+        },
+        {
+          id: "mock",
+          label: "Mock auth",
+          kind: "custom",
+          run: vi.fn(),
+        },
+      ],
+      {
+        map() {
+          throw new Error("fuzzplugin auth map failed");
+        },
+        [Symbol.iterator]() {
+          throw new Error("mockplugin auth iterator failed");
+        },
+      },
+    ) satisfies ProviderPlugin["auth"];
+    const provider = makeProvider({
+      id: "fuzzplugin",
+      label: "Fuzz Plugin",
+      auth,
+      wizard: {
+        modelPicker: {
+          label: "Fuzz model",
+        },
+      },
+    });
+    setResolvedProviders(provider);
+
+    expect(resolveProviderWizardOptions({})).toEqual([
+      {
+        value: "fuzzplugin-api-key",
+        label: "Fuzz Plugin API key",
+        groupId: "fuzzplugin",
+        groupLabel: "Fuzz Plugin",
+      },
+    ]);
+    expect(resolveProviderModelPickerEntries({})).toEqual([
+      {
+        value: buildProviderPluginMethodChoice("fuzzplugin", "api-key"),
+        label: "Fuzz model",
+        hint: undefined,
+      },
+    ]);
+    expect(
+      resolveProviderPluginChoice({
+        providers: [provider],
+        choice: buildProviderPluginMethodChoice("fuzzplugin", "mock"),
+      }),
+    ).toEqual({
+      provider,
+      method: auth[1],
+    });
+  });
+
   it("resolves providers in setup mode across wizard consumers", () => {
     const provider = createSglangWizardProvider({ includeModelPicker: true });
     const config = {};
