@@ -360,6 +360,89 @@ describe("provider wizard boundaries", () => {
     });
   });
 
+  it("skips unreadable method wizard metadata while preserving readable methods", () => {
+    const unreadableMethod = {
+      id: "unreadable",
+      label: "Unreadable",
+      kind: "custom",
+      run: vi.fn(),
+    };
+    Object.defineProperty(unreadableMethod, "wizard", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin method wizard read failed");
+      },
+    });
+    const readableMethod = {
+      id: "api-key",
+      label: "Mock API key",
+      kind: "api_key",
+      wizard: {
+        choiceId: "mockplugin-api-key",
+        choiceLabel: "Mock Plugin API key",
+      },
+      run: vi.fn(),
+    };
+    const provider = makeProvider({
+      id: "fuzzplugin",
+      label: "Fuzz Plugin",
+      auth: [unreadableMethod, readableMethod] as ProviderPlugin["auth"],
+    });
+    setResolvedProviders(provider);
+
+    expect(resolveProviderWizardOptions({})).toEqual([
+      {
+        value: "mockplugin-api-key",
+        label: "Mock Plugin API key",
+        groupId: "fuzzplugin",
+        groupLabel: "Fuzz Plugin",
+      },
+    ]);
+    expect(
+      resolveProviderPluginChoice({
+        providers: [provider],
+        choice: "mockplugin-api-key",
+      }),
+    ).toEqual({
+      provider,
+      method: readableMethod,
+      wizard: readableMethod.wizard,
+    });
+  });
+
+  it("skips unreadable provider wizard metadata while preserving readable providers", () => {
+    const unreadableProvider = makeProvider({
+      id: "fuzzplugin",
+      label: "Fuzz Plugin",
+    });
+    Object.defineProperty(unreadableProvider, "wizard", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin provider wizard read failed");
+      },
+    });
+    const readableProvider = createSglangWizardProvider({ includeModelPicker: true });
+    setResolvedProviders(unreadableProvider, readableProvider);
+
+    expect(resolveProviderWizardOptions({})).toEqual([
+      {
+        value: "sglang",
+        label: "SGLang setup",
+        groupId: "sglang",
+        groupLabel: "SGLang",
+        groupHint: undefined,
+        hint: undefined,
+      },
+    ]);
+    expect(resolveProviderModelPickerEntries({})).toEqual([
+      {
+        value: buildProviderPluginMethodChoice("sglang", "server"),
+        label: "SGLang server",
+        hint: undefined,
+      },
+    ]);
+  });
+
   it("resolves providers in setup mode across wizard consumers", () => {
     const provider = createSglangWizardProvider({ includeModelPicker: true });
     const config = {};

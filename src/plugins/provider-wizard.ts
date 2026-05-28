@@ -11,6 +11,7 @@ import { resolvePluginSetupProvider } from "./setup-registry.js";
 import type {
   ProviderAuthMethod,
   ProviderPlugin,
+  ProviderPluginWizard,
   ProviderPluginWizardModelPicker,
   ProviderPluginWizardSetup,
 } from "./types.js";
@@ -54,23 +55,126 @@ export function setProviderWizardProvidersResolverForTest(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRecordValue(record: unknown, key: string): unknown {
+  if (!record || typeof record !== "object") {
+    return undefined;
+  }
+  try {
+    return (record as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readProviderId(provider: ProviderPlugin): string {
+  return normalizeOptionalString(readRecordValue(provider, "id")) ?? "";
+}
+
+function readProviderLabel(provider: ProviderPlugin): string | undefined {
+  return normalizeOptionalString(readRecordValue(provider, "label"));
+}
+
+function readProviderWizard(provider: ProviderPlugin): ProviderPluginWizard | undefined {
+  const wizard = readRecordValue(provider, "wizard");
+  return isRecord(wizard) ? (wizard as ProviderPluginWizard) : undefined;
+}
+
+function readProviderModelSelectedHook(
+  provider: ProviderPlugin,
+): ProviderPlugin["onModelSelected"] | undefined {
+  const hook = readRecordValue(provider, "onModelSelected");
+  return typeof hook === "function" ? (hook as ProviderPlugin["onModelSelected"]) : undefined;
+}
+
+function readAuthMethodId(method: ProviderAuthMethod | undefined): string {
+  return normalizeOptionalString(readRecordValue(method, "id")) ?? "";
+}
+
+function readAuthMethodLabel(method: ProviderAuthMethod): string | undefined {
+  return normalizeOptionalString(readRecordValue(method, "label"));
+}
+
+function readAuthMethodWizard(method: ProviderAuthMethod): ProviderPluginWizardSetup | undefined {
+  const wizard = readRecordValue(method, "wizard");
+  return isRecord(wizard) ? (wizard as ProviderPluginWizardSetup) : undefined;
+}
+
+function readWizardSetup(
+  wizard: ProviderPluginWizard | undefined,
+): ProviderPluginWizardSetup | undefined {
+  const setup = readRecordValue(wizard, "setup");
+  return isRecord(setup) ? (setup as ProviderPluginWizardSetup) : undefined;
+}
+
+function readWizardModelPicker(
+  wizard: ProviderPluginWizard | undefined,
+): ProviderPluginWizardModelPicker | undefined {
+  const modelPicker = readRecordValue(wizard, "modelPicker");
+  return isRecord(modelPicker) ? (modelPicker as ProviderPluginWizardModelPicker) : undefined;
+}
+
+function readWizardString(
+  wizard: ProviderPluginWizardSetup | ProviderPluginWizardModelPicker,
+  key: string,
+): string | undefined {
+  return normalizeOptionalString(readRecordValue(wizard, key));
+}
+
+function copyOnboardingScopes(
+  value: unknown,
+): ProviderWizardOption["onboardingScopes"] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const scopes: NonNullable<ProviderWizardOption["onboardingScopes"]> = [];
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return undefined;
+  }
+  for (let index = 0; index < length; index += 1) {
+    let entry: unknown;
+    try {
+      entry = value[index];
+    } catch {
+      continue;
+    }
+    if (
+      entry === "text-inference" ||
+      entry === "image-generation" ||
+      entry === "music-generation"
+    ) {
+      scopes.push(entry);
+    }
+  }
+  return scopes.length > 0 ? scopes : undefined;
+}
+
 function resolveWizardSetupChoiceId(
   provider: ProviderPlugin,
   wizard: ProviderPluginWizardSetup,
   authMethods: ProviderAuthMethod[],
 ): string {
-  const explicit = normalizeOptionalString(wizard.choiceId);
+  const explicit = readWizardString(wizard, "choiceId");
   if (explicit) {
     return explicit;
   }
-  const explicitMethodId = normalizeOptionalString(wizard.methodId);
+  const explicitMethodId = readWizardString(wizard, "methodId");
   if (explicitMethodId) {
-    return buildProviderPluginMethodChoice(provider.id, explicitMethodId);
+    return buildProviderPluginMethodChoice(readProviderId(provider), explicitMethodId);
   }
   if (authMethods.length === 1) {
-    return provider.id;
+    return readProviderId(provider);
   }
-  return buildProviderPluginMethodChoice(provider.id, authMethods[0]?.id ?? "default");
+  return buildProviderPluginMethodChoice(
+    readProviderId(provider),
+    readAuthMethodId(authMethods[0]) || "default",
+  );
 }
 
 function resolveMethodById(
@@ -82,7 +186,7 @@ function resolveMethodById(
     return authMethods[0];
   }
   return authMethods.find(
-    (method) => normalizeOptionalLowercaseString(method.id) === normalizedMethodId,
+    (method) => normalizeOptionalLowercaseString(readAuthMethodId(method)) === normalizedMethodId,
   );
 }
 
@@ -122,11 +226,14 @@ function listMethodWizardSetups(authMethods: ProviderAuthMethod[]): Array<{
   method: ProviderAuthMethod;
   wizard: ProviderPluginWizardSetup;
 }> {
-  return authMethods
-    .map((method) => (method.wizard ? { method, wizard: method.wizard } : null))
-    .filter((entry): entry is { method: ProviderAuthMethod; wizard: ProviderPluginWizardSetup } =>
-      Boolean(entry),
-    );
+  const setups: Array<{ method: ProviderAuthMethod; wizard: ProviderPluginWizardSetup }> = [];
+  for (const method of authMethods) {
+    const wizard = readAuthMethodWizard(method);
+    if (wizard) {
+      setups.push({ method, wizard });
+    }
+  }
+  return setups;
 }
 
 function buildSetupOptionForMethod(params: {
@@ -136,25 +243,34 @@ function buildSetupOptionForMethod(params: {
   value: string;
   authMethodCount: number;
 }): ProviderWizardOption {
-  const normalizedGroupId = normalizeOptionalString(params.wizard.groupId) || params.provider.id;
+  const providerId = readProviderId(params.provider);
+  const providerLabel = readProviderLabel(params.provider) ?? providerId;
+  const methodLabel = readAuthMethodLabel(params.method) ?? providerLabel;
+  const normalizedGroupId = readWizardString(params.wizard, "groupId") || providerId;
+  const onboardingScopes = copyOnboardingScopes(readRecordValue(params.wizard, "onboardingScopes"));
+  const assistantPriority = readRecordValue(params.wizard, "assistantPriority");
+  const assistantVisibility = readRecordValue(params.wizard, "assistantVisibility");
   return {
     value: normalizeOptionalString(params.value) ?? "",
     label:
-      normalizeOptionalString(params.wizard.choiceLabel) ||
-      (params.authMethodCount === 1 ? params.provider.label : params.method.label),
-    hint: normalizeOptionalString(params.wizard.choiceHint) || params.method.hint,
+      readWizardString(params.wizard, "choiceLabel") ||
+      (params.authMethodCount === 1 ? providerLabel : methodLabel),
+    hint:
+      readWizardString(params.wizard, "choiceHint") ||
+      normalizeOptionalString(readRecordValue(params.method, "hint")),
     groupId: normalizedGroupId,
-    groupLabel: normalizeOptionalString(params.wizard.groupLabel) || params.provider.label,
-    groupHint: normalizeOptionalString(params.wizard.groupHint),
-    ...(params.wizard.onboardingScopes ? { onboardingScopes: params.wizard.onboardingScopes } : {}),
-    ...(typeof params.wizard.assistantPriority === "number" &&
-    Number.isFinite(params.wizard.assistantPriority)
-      ? { assistantPriority: params.wizard.assistantPriority }
+    groupLabel: readWizardString(params.wizard, "groupLabel") || providerLabel,
+    groupHint: readWizardString(params.wizard, "groupHint"),
+    ...(onboardingScopes ? { onboardingScopes } : {}),
+    ...(typeof assistantPriority === "number" && Number.isFinite(assistantPriority)
+      ? { assistantPriority }
       : {}),
-    ...(params.wizard.assistantVisibility
-      ? { assistantVisibility: params.wizard.assistantVisibility }
+    ...(assistantVisibility === "visible" || assistantVisibility === "manual-only"
+      ? { assistantVisibility }
       : {}),
-    ...(params.wizard.onboardingFeatured ? { onboardingFeatured: true } : {}),
+    ...(readRecordValue(params.wizard, "onboardingFeatured") === true
+      ? { onboardingFeatured: true }
+      : {}),
   };
 }
 
@@ -197,19 +313,19 @@ export function resolveProviderWizardOptions(params: {
           method,
           authMethodCount: authMethods.length,
           value:
-            normalizeOptionalString(wizard.choiceId) ||
-            buildProviderPluginMethodChoice(provider.id, method.id),
+            readWizardString(wizard, "choiceId") ||
+            buildProviderPluginMethodChoice(readProviderId(provider), readAuthMethodId(method)),
         }),
       );
     }
     if (methodSetups.length > 0) {
       continue;
     }
-    const setup = provider.wizard?.setup;
+    const setup = readWizardSetup(readProviderWizard(provider));
     if (!setup) {
       continue;
     }
-    const explicitMethod = resolveMethodById(authMethods, setup.methodId);
+    const explicitMethod = resolveMethodById(authMethods, readWizardString(setup, "methodId"));
     if (explicitMethod) {
       options.push(
         buildSetupOptionForMethod({
@@ -230,7 +346,10 @@ export function resolveProviderWizardOptions(params: {
           wizard: setup,
           method,
           authMethodCount: authMethods.length,
-          value: buildProviderPluginMethodChoice(provider.id, method.id),
+          value: buildProviderPluginMethodChoice(
+            readProviderId(provider),
+            readAuthMethodId(method),
+          ),
         }),
       );
     }
@@ -244,14 +363,17 @@ function resolveModelPickerChoiceValue(
   modelPicker: ProviderPluginWizardModelPicker,
   authMethods: ProviderAuthMethod[],
 ): string {
-  const explicitMethodId = normalizeOptionalString(modelPicker.methodId);
+  const explicitMethodId = readWizardString(modelPicker, "methodId");
   if (explicitMethodId) {
-    return buildProviderPluginMethodChoice(provider.id, explicitMethodId);
+    return buildProviderPluginMethodChoice(readProviderId(provider), explicitMethodId);
   }
   if (authMethods.length === 1) {
-    return provider.id;
+    return readProviderId(provider);
   }
-  return buildProviderPluginMethodChoice(provider.id, authMethods[0]?.id ?? "default");
+  return buildProviderPluginMethodChoice(
+    readProviderId(provider),
+    readAuthMethodId(authMethods[0]) || "default",
+  );
 }
 
 export function resolveProviderModelPickerEntries(params: {
@@ -263,15 +385,17 @@ export function resolveProviderModelPickerEntries(params: {
   const entries: ProviderModelPickerEntry[] = [];
 
   for (const provider of providers) {
-    const modelPicker = provider.wizard?.modelPicker;
+    const modelPicker = readWizardModelPicker(readProviderWizard(provider));
     if (!modelPicker) {
       continue;
     }
     const authMethods = copyProviderAuthMethods(provider);
     entries.push({
       value: resolveModelPickerChoiceValue(provider, modelPicker, authMethods),
-      label: normalizeOptionalString(modelPicker.label) || `${provider.label} (custom)`,
-      hint: normalizeOptionalString(modelPicker.hint),
+      label:
+        readWizardString(modelPicker, "label") ||
+        `${readProviderLabel(provider) ?? readProviderId(provider)} (custom)`,
+      hint: readWizardString(modelPicker, "hint"),
     });
   }
 
@@ -297,7 +421,7 @@ export function resolveProviderPluginChoice(params: {
     const providerId = separator >= 0 ? payload.slice(0, separator) : payload;
     const methodId = separator >= 0 ? payload.slice(separator + 1) : undefined;
     const provider = params.providers.find(
-      (entry) => normalizeProviderId(entry.id) === normalizeProviderId(providerId),
+      (entry) => normalizeProviderId(readProviderId(entry)) === normalizeProviderId(providerId),
     );
     if (!provider) {
       return null;
@@ -310,24 +434,24 @@ export function resolveProviderPluginChoice(params: {
     const authMethods = copyProviderAuthMethods(provider);
     for (const { method, wizard } of listMethodWizardSetups(authMethods)) {
       const choiceId =
-        normalizeOptionalString(wizard.choiceId) ||
-        buildProviderPluginMethodChoice(provider.id, method.id);
+        readWizardString(wizard, "choiceId") ||
+        buildProviderPluginMethodChoice(readProviderId(provider), readAuthMethodId(method));
       if ((normalizeOptionalString(choiceId) ?? "") === choice) {
         return { provider, method, wizard };
       }
     }
-    const setup = provider.wizard?.setup;
+    const setup = readWizardSetup(readProviderWizard(provider));
     if (setup) {
       const setupChoiceId = resolveWizardSetupChoiceId(provider, setup, authMethods);
       if ((normalizeOptionalString(setupChoiceId) ?? "") === choice) {
-        const method = resolveMethodById(authMethods, setup.methodId);
+        const method = resolveMethodById(authMethods, readWizardString(setup, "methodId"));
         if (method) {
           return { provider, method, wizard: setup };
         }
       }
     }
     if (
-      normalizeProviderId(provider.id) === normalizeProviderId(choice) &&
+      normalizeProviderId(readProviderId(provider)) === normalizeProviderId(choice) &&
       authMethods.length > 0
     ) {
       return { provider, method: authMethods[0] };
@@ -370,12 +494,13 @@ export async function runProviderModelSelectedHook(params: {
       config: params.config,
       workspaceDir: params.workspaceDir,
       env: params.env,
-    }).find((entry) => normalizeProviderId(entry.id) === selectedProviderId);
-  if (!provider?.onModelSelected) {
+    }).find((entry) => normalizeProviderId(readProviderId(entry)) === selectedProviderId);
+  const onModelSelected = provider ? readProviderModelSelectedHook(provider) : undefined;
+  if (!onModelSelected) {
     return;
   }
 
-  await provider.onModelSelected({
+  await onModelSelected.call(provider, {
     config: params.config,
     model: params.model,
     prompter: params.prompter,
