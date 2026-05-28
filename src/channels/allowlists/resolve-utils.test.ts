@@ -38,6 +38,31 @@ describe("buildAllowlistResolutionSummary", () => {
     });
     expect(result.unresolved).toEqual(["a (missing)"]);
   });
+
+  it("skips unreadable synthetic plugin resolution entries", () => {
+    const resolvedUsers = Array.from({ length: 2 }) as Array<{
+      input: string;
+      resolved: boolean;
+      id?: string;
+    }>;
+    Object.defineProperty(resolvedUsers, 0, {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable resolution");
+      },
+    });
+    resolvedUsers[1] = { input: "mockplugin", resolved: true, id: "111" };
+
+    const result = buildAllowlistResolutionSummary(resolvedUsers, {
+      formatResolved() {
+        throw new Error("formatter failed");
+      },
+    });
+
+    expect(result.mapping).toEqual(["mockplugin→111"]);
+    expect(result.additions).toEqual(["111"]);
+    expect(result.resolvedMap.get("mockplugin")).toBe(resolvedUsers[1]);
+  });
 });
 
 describe("addAllowlistUserEntriesFromConfigEntry", () => {
@@ -51,6 +76,37 @@ describe("addAllowlistUserEntriesFromConfigEntry", () => {
     const target = new Set<string>(["a"]);
     addAllowlistUserEntriesFromConfigEntry(target, null);
     expect(Array.from(target)).toEqual(["a"]);
+  });
+
+  it("ignores unreadable synthetic plugin user lists", () => {
+    const target = new Set<string>(["owner"]);
+    const entry = {};
+    Object.defineProperty(entry, "users", {
+      enumerable: true,
+      get() {
+        throw new Error("users unavailable");
+      },
+    });
+
+    addAllowlistUserEntriesFromConfigEntry(target, entry);
+
+    expect(Array.from(target)).toEqual(["owner"]);
+  });
+
+  it("keeps readable synthetic plugin users after unreadable array entries", () => {
+    const target = new Set<string>();
+    const users = Array.from({ length: 2 }) as Array<string | number>;
+    Object.defineProperty(users, 0, {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable user");
+      },
+    });
+    users[1] = " mockplugin ";
+
+    addAllowlistUserEntriesFromConfigEntry(target, { users });
+
+    expect(Array.from(target)).toEqual(["mockplugin"]);
   });
 });
 
@@ -75,6 +131,24 @@ describe("canonicalizeAllowlistWithResolvedIds", () => {
     });
     expect(result).toEqual(["111"]);
   });
+
+  it("keeps readable synthetic plugin allowlist entries after unreadable array entries", () => {
+    const resolvedMap = new Map([
+      ["mockplugin", { input: "mockplugin", resolved: true, id: "111" }],
+    ]);
+    const existing = Array.from({ length: 2 }) as Array<string | number>;
+    Object.defineProperty(existing, 0, {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable allowlist");
+      },
+    });
+    existing[1] = "mockplugin";
+
+    const result = canonicalizeAllowlistWithResolvedIds({ existing, resolvedMap });
+
+    expect(result).toEqual(["111"]);
+  });
 });
 
 describe("patchAllowlistUsersInConfigEntries", () => {
@@ -94,6 +168,48 @@ describe("patchAllowlistUsersInConfigEntries", () => {
     });
     expect((patched.alpha as { users: string[] }).users).toEqual(["111", "Bob"]);
     expect((patched.beta as { users: string[] }).users).toEqual(["*"]);
+  });
+
+  it("skips unreadable synthetic plugin config entries and patches readable siblings", () => {
+    const entries: Record<string, unknown> = {
+      mockplugin: { users: ["Alice"], enabled: true },
+    };
+    Object.defineProperty(entries, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable config entry");
+      },
+    });
+    const resolvedMap = new Map([["Alice", { input: "Alice", resolved: true, id: "111" }]]);
+
+    const patched = patchAllowlistUsersInConfigEntries({
+      entries,
+      resolvedMap,
+      strategy: "canonicalize",
+    });
+
+    expect(Object.keys(patched)).toEqual(["mockplugin"]);
+    expect((patched.mockplugin as { users: string[] }).users).toEqual(["111"]);
+    expect((patched.mockplugin as { enabled: boolean }).enabled).toBe(true);
+  });
+
+  it("patches readable fields when synthetic plugin entry fields are unreadable", () => {
+    const entry: Record<string, unknown> = { users: ["Alice"] };
+    Object.defineProperty(entry, "note", {
+      enumerable: true,
+      get() {
+        throw new Error("unreadable field");
+      },
+    });
+    const resolvedMap = new Map([["Alice", { input: "Alice", resolved: true, id: "111" }]]);
+
+    const patched = patchAllowlistUsersInConfigEntries({
+      entries: { fuzzplugin: entry },
+      resolvedMap,
+    });
+
+    expect((patched.fuzzplugin as { users: string[] }).users).toEqual(["Alice", "111"]);
+    expect("note" in (patched.fuzzplugin as Record<string, unknown>)).toBe(false);
   });
 });
 
