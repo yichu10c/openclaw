@@ -109,13 +109,31 @@ function stableDescriptorCacheValueKey(value: unknown, stack = new WeakSet<objec
   stack.add(value);
   try {
     if (Array.isArray(value)) {
-      return `[${value.map((entry) => stableDescriptorCacheValueKey(entry, stack)).join(",")}]`;
+      const entries: string[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        try {
+          entries.push(stableDescriptorCacheValueKey(value[index], stack));
+        } catch {
+          entries.push(JSON.stringify("[Unreadable]"));
+        }
+      }
+      return `[${entries.join(",")}]`;
     }
 
     const fields: string[] = [];
     const record = value as Record<string, unknown>;
-    for (const key of Object.keys(record).toSorted()) {
-      fields.push(`${JSON.stringify(key)}:${stableDescriptorCacheValueKey(record[key], stack)}`);
+    let keys: string[];
+    try {
+      keys = Object.keys(record).toSorted();
+    } catch {
+      return JSON.stringify("[UnreadableObject]");
+    }
+    for (const key of keys) {
+      try {
+        fields.push(`${JSON.stringify(key)}:${stableDescriptorCacheValueKey(record[key], stack)}`);
+      } catch {
+        fields.push(`${JSON.stringify(key)}:${JSON.stringify("[Unreadable]")}`);
+      }
     }
     return `{${fields.join(",")}}`;
   } finally {

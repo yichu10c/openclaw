@@ -186,6 +186,41 @@ describe("plugin tool descriptor cache keys", () => {
     ).not.toThrow();
   });
 
+  it("does not throw when fuzzed context metadata contains unreadable fields", () => {
+    const deliveryContext = {
+      channel: "fuzz-channel",
+      to: "thread:1",
+      args: ["stable"],
+    } as Record<string, unknown>;
+    Object.defineProperty(deliveryContext, "toolName", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin descriptor context read failed");
+      },
+    });
+    Object.defineProperty(deliveryContext.args as unknown[], "1", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        throw new Error("mockplugin descriptor arg read failed");
+      },
+    });
+
+    const key = buildPluginToolDescriptorCacheKey({
+      pluginId: "fuzzplugin",
+      source: "/tmp/fuzzplugin.js",
+      contractToolNames: ["fuzz_move_angles"],
+      ctx: {
+        deliveryContext: deliveryContext as never,
+      },
+    });
+
+    expect(key).toContain("fuzzplugin");
+    expect(key).not.toContain("descriptor context read failed");
+    expect(key).not.toContain("descriptor arg read failed");
+  });
+
   it("keeps descriptor keys stable across config bookkeeping writes", () => {
     const firstConfig = {
       id: "runtime",
