@@ -678,6 +678,78 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 
+  it("tolerates non-json config values when keying provider runtime cache", () => {
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+    };
+    resolvePluginProvidersMock.mockReturnValue([provider]);
+    const fuzzMoveAngles: Record<string, unknown> = {
+      id: "fuzz_move_angles",
+      depth: 1n,
+    };
+    fuzzMoveAngles.self = fuzzMoveAngles;
+    const config = {
+      plugins: {
+        entries: {
+          fuzzplugin: {
+            enabled: true,
+            config: fuzzMoveAngles,
+          },
+        },
+      },
+      models: {
+        providers: {
+          mockplugin: {
+            metadata: fuzzMoveAngles,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })).toBe(provider);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not alias string and bigint config values in provider runtime cache keys", () => {
+    const firstProvider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo one",
+      auth: [],
+    };
+    const secondProvider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo two",
+      auth: [],
+    };
+    const fuzzplugin = {
+      enabled: true,
+      config: {
+        route: "1",
+      },
+    };
+    const config = {
+      plugins: {
+        entries: {
+          fuzzplugin,
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    resolvePluginProvidersMock.mockReturnValueOnce([firstProvider]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })).toBe(
+      firstProvider,
+    );
+
+    fuzzplugin.config.route = 1n as unknown as string;
+    resolvePluginProvidersMock.mockReturnValueOnce([secondProvider]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })).toBe(
+      secondProvider,
+    );
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does not reuse runtime provider cache entries across env-resolved plugin roots", () => {
     const firstProvider: ProviderPlugin = {
       id: DEMO_PROVIDER_ID,
