@@ -170,13 +170,13 @@ function normalizeProviderAuthConfigPatchModelRefs(
     if (defaultModel !== undefined) {
       const model = normalizeAgentModelConfigForAuthResult(defaultModel);
       if (model !== defaultModel) {
-        nextDefaults = { ...nextDefaults, model: model as typeof defaults.model };
+        nextDefaults = { ...nextDefaults, model };
       }
     }
     const defaultModels = readRecordValue(defaults, "models");
-    if (defaultModels) {
+    if (isRecord(defaultModels)) {
       try {
-        const models = normalizeAgentModelMapForConfig(defaultModels as typeof defaults.models);
+        const models = normalizeAgentModelMapForConfig(defaultModels);
         if (models !== defaultModels) {
           nextDefaults = { ...nextDefaults, models };
         }

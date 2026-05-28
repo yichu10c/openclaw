@@ -212,11 +212,11 @@ function normalizeAgentModelAliasEntry(entry: AgentModelAliasEntry): {
   if (typeof entry === "string") {
     return { modelRef: entry };
   }
+  const modelRef = readRecordValue(entry, "modelRef");
+  const alias = readRecordValue(entry, "alias");
   return {
-    modelRef: String(readRecordValue(entry, "modelRef") ?? ""),
-    ...(typeof readRecordValue(entry, "alias") === "string"
-      ? { alias: String(readRecordValue(entry, "alias")) }
-      : undefined),
+    modelRef: typeof modelRef === "string" ? modelRef : "",
+    ...(typeof alias === "string" ? { alias } : undefined),
   };
 }
 
@@ -485,6 +485,7 @@ export function applyOnboardAuthAgentModelsAndProviders(
     return cfg;
   }
   const mode = readRecordValue(modelsValue, "mode");
+  const normalizedMode = mode === "replace" || mode === "merge" ? mode : "merge";
   const mergedAgentModels = normalizeAgentModelMapForConfig(
     Object.fromEntries([
       ...defaultModelsCopy.entries,
@@ -501,7 +502,7 @@ export function applyOnboardAuthAgentModelsAndProviders(
       },
     },
     models: {
-      mode: mode ?? "merge",
+      mode: normalizedMode,
       providers: params.providers,
     },
   };

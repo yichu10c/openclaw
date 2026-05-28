@@ -23,7 +23,7 @@ describe("provider config owner lookup", () => {
           },
         ),
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expect(resolveConfiguredProviderConfig({ provider: "mock provider", config })).toBeUndefined();
     expect(
@@ -49,7 +49,7 @@ describe("provider config owner lookup", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expect(resolveProviderConfigApiOwnerHint({ provider: "mock provider", config })).toBe(
       "fuzzplugin",

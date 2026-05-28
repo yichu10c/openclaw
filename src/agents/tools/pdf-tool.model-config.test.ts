@@ -81,7 +81,7 @@ describe("resolvePdfModelConfigForTool", () => {
           pdfModel: { primary: ANTHROPIC_PDF_MODEL },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
       primary: ANTHROPIC_PDF_MODEL,
     });
@@ -95,7 +95,7 @@ describe("resolvePdfModelConfigForTool", () => {
           imageModel: { primary: "openai/gpt-5.4-mini" },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
       primary: "openai/gpt-5.4-mini",
     });
@@ -140,7 +140,7 @@ describe("resolvePdfModelConfigForTool", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
       primary: "minimax/MiniMax-M2.7",
@@ -200,7 +200,7 @@ describe("resolvePdfModelConfigForTool", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
       primary: "openai/gpt-5.4-mini",

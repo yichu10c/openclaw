@@ -372,10 +372,10 @@ describe("defineSingleProviderPluginEntry", () => {
           models: [],
         }),
       },
-      get capabilities() {
+      get capabilities(): never {
         throw new Error("fuzzplugin provider capabilities read failed");
       },
-      get hookAliases() {
+      get hookAliases(): never {
         throw new Error("mockplugin provider hook aliases read failed");
       },
     };

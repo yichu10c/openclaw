@@ -71,7 +71,7 @@ describe("access group allowlists", () => {
         throw new Error("mockplugin access group allowFrom iterator failed");
       },
     });
-    delete allowFrom[1];
+    Reflect.deleteProperty(allowFrom, 1);
 
     const state = await resolveAccessGroupAllowFromState({
       accessGroups: cfg.accessGroups,

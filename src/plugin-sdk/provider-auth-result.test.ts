@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 
 describe("buildOauthProviderAuthResult", () => {
@@ -154,7 +155,7 @@ describe("buildOauthProviderAuthResult", () => {
           providers: {
             fuzzplugin: {
               baseUrl: "https://example.invalid/v1",
-              models: providerModels,
+              models: providerModels as unknown as ModelDefinitionConfig[],
             },
           },
         },
@@ -202,7 +203,9 @@ describe("buildOauthProviderAuthResult", () => {
       defaultModel: "fuzzplugin/default",
       access: "access-token",
       configPatch: {
-        models: { providers },
+        models: {
+          providers: providers as unknown as Record<string, ModelProviderConfig>,
+        },
       },
     });
 
@@ -235,7 +238,7 @@ describe("buildOauthProviderAuthResult", () => {
       defaultModel: "fuzzplugin/default",
       access: "access-token",
       configPatch: {
-        models: { providers },
+        models: { providers: providers as unknown as Record<string, ModelProviderConfig> },
       },
     });
 

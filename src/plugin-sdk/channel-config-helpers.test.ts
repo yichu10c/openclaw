@@ -127,7 +127,7 @@ describe("mapAllowFromEntries", () => {
 
   it("preserves sparse array map semantics while copying entries", () => {
     const allowFrom = ["owner", "skip", 42];
-    delete allowFrom[1];
+    Reflect.deleteProperty(allowFrom, 1);
 
     expect(mapAllowFromEntries(allowFrom)).toEqual(["owner", "42"]);
   });

@@ -176,7 +176,9 @@ describe("resolveChannelEntryMatchWithFallback", () => {
     });
 
     expect(match).toEqual({ key: "fuzzplugin" });
-    expect(resolveChannelMatchConfig(match, (entry) => entry)).toBeNull();
+    expect(
+      resolveChannelMatchConfig(match, (entry) => ({ ...entry, matchKey: undefined })),
+    ).toBeNull();
   });
 
   it("keeps wildcard fallback for readable nullish direct entries", () => {
@@ -232,7 +234,9 @@ describe("resolveChannelEntryMatchWithFallback", () => {
     });
 
     expect(match).toEqual({ key: "Fuzz Plugin" });
-    expect(resolveChannelMatchConfig(match, (entry) => entry)).toBeNull();
+    expect(
+      resolveChannelMatchConfig(match, (entry) => ({ ...entry, matchKey: undefined })),
+    ).toBeNull();
   });
 
   it("skips unreadable normalized misses and keeps scanning later entries", () => {

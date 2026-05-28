@@ -209,7 +209,7 @@ describe("patchAllowlistUsersInConfigEntries", () => {
     });
 
     expect((patched.fuzzplugin as { users: string[] }).users).toEqual(["Alice", "111"]);
-    expect("note" in (patched.fuzzplugin as Record<string, unknown>)).toBe(false);
+    expect("note" in patched.fuzzplugin).toBe(false);
   });
 });
 

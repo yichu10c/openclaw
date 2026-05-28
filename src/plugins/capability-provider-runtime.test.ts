@@ -465,7 +465,7 @@ describe("resolvePluginCapabilityProviders", () => {
           },
         ),
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expectNoResolvedCapabilityProviders(
       resolvePluginCapabilityProviders({ key: "speechProviders", cfg }),

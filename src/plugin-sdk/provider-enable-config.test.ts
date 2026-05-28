@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { enablePluginInConfig as enableFetchPluginInConfig } from "./provider-web-fetch-contract.js";
 import { enablePluginInConfig as enableSearchPluginInConfig } from "./provider-web-search-contract.js";
 
@@ -76,7 +77,10 @@ describe("provider contract enablePluginInConfig", () => {
     expect(result.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["mockplugin", "fuzzplugin"]);
     expect(result.config.plugins?.deny).toEqual(["blockedplugin"]);
-    expect(result.config.plugins?.entries?.fuzzplugin).toEqual({ enabled: true });
+    expect(
+      (result.config.plugins as { entries?: Record<string, unknown> } | undefined)?.entries
+        ?.fuzzplugin,
+    ).toEqual({ enabled: true });
   });
 
   it("skips unreadable provider plugin entry config during enablement", () => {
@@ -90,7 +94,7 @@ describe("provider contract enablePluginInConfig", () => {
     const result = enableSearchPluginInConfig(
       {
         plugins: {
-          entries,
+          entries: entries as unknown as Record<string, PluginEntryConfig>,
         },
       },
       "fuzzplugin",

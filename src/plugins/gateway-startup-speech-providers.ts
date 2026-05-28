@@ -72,7 +72,7 @@ function copyRecordEntries(value: unknown): Array<[string, unknown]> {
   const entries: Array<[string, unknown]> = [];
   for (const key of keys) {
     try {
-      entries.push([key, (value as Record<string, unknown>)[key]]);
+      entries.push([key, value[key]]);
     } catch {
       // Skip unreadable startup config entries; readable siblings can still load providers.
     }

@@ -48,7 +48,7 @@ describe("normalizePluginsConfigWithResolver", () => {
           llm: { allowedModels },
         },
       },
-    } as OpenClawConfig["plugins"]);
+    } as unknown as OpenClawConfig["plugins"]);
 
     expect(normalized.allow).toEqual(["fuzzplugin"]);
     expect(normalized.entries.fuzzplugin?.llm?.allowedModels).toEqual(["mock/model"]);
@@ -72,7 +72,7 @@ describe("normalizePluginsConfigWithResolver", () => {
 
     const normalized = normalizePluginsConfigWithResolver({
       entries,
-    } as OpenClawConfig["plugins"]);
+    } as unknown as OpenClawConfig["plugins"]);
 
     expect(normalized.entries).not.toHaveProperty("fuzzplugin");
     expect(normalized.entries.mockplugin).toEqual({

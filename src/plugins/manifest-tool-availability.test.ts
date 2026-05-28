@@ -139,6 +139,24 @@ describe("manifest tool availability", () => {
     ).toBe(false);
   });
 
+  it("treats malformed tool config signal metadata as unavailable", () => {
+    const plugin = createPlugin({
+      toolMetadata: {
+        fuzz_move_delta: {
+          configSignals: [{ rootPath: 123 }] as never,
+        },
+      },
+    });
+
+    expect(
+      hasManifestToolAvailability({
+        plugin,
+        toolNames: ["fuzz_move_delta"],
+        env: process.env,
+      }),
+    ).toBe(false);
+  });
+
   it("treats unreadable required config signal lists as unavailable", () => {
     expect(
       manifestConfigSignalPasses({

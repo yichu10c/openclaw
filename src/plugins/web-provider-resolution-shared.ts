@@ -109,10 +109,9 @@ function copyProviderWithPluginId<TProvider extends { id: string }>(
     ) {
       continue;
     }
-    try {
-      copy[key] = provider[key];
-    } catch {
-      // Skip unreadable optional provider metadata; the provider id still declares availability.
+    const value = readRecordValue(provider, key);
+    if (value !== undefined) {
+      copy[key] = value;
     }
   }
   return copy as TProvider & { pluginId: string };

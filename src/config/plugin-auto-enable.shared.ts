@@ -32,6 +32,7 @@ import type {
 import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+import type { PluginEntryConfig } from "./types.plugins.js";
 export type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,
@@ -131,6 +132,14 @@ function readPluginEntryConfig(cfg: OpenClawConfig, pluginId: string): unknown {
 
 function readPluginEntryEnabled(cfg: OpenClawConfig, pluginId: string): unknown {
   return readConfigValue(readPluginEntry(cfg, pluginId), "enabled");
+}
+
+function copyPluginEntriesConfig(value: unknown): Record<string, PluginEntryConfig> {
+  return Object.fromEntries(copyConfigRecordEntries(value)) as Record<string, PluginEntryConfig>;
+}
+
+function copyPluginEntryConfig(value: unknown): PluginEntryConfig {
+  return Object.fromEntries(copyConfigRecordEntries(value)) as PluginEntryConfig;
 }
 
 function resolveAutoEnableProviderPluginIds(
@@ -862,7 +871,7 @@ function disableImplicitPreferredOverPlugin(params: {
     return params.config;
   }
   const existingEntry = readPluginEntry(params.config, params.pluginId);
-  const entries = Object.fromEntries(copyConfigRecordEntries(readPluginEntries(params.config)));
+  const entries = copyPluginEntriesConfig(readPluginEntries(params.config));
   return {
     ...params.config,
     plugins: {
@@ -870,7 +879,7 @@ function disableImplicitPreferredOverPlugin(params: {
       entries: {
         ...entries,
         [params.pluginId]: {
-          ...Object.fromEntries(copyConfigRecordEntries(existingEntry)),
+          ...copyPluginEntryConfig(existingEntry),
           enabled: false,
         },
       },
@@ -942,9 +951,9 @@ function registerPluginEntry(
     plugins: {
       ...cfg.plugins,
       entries: {
-        ...Object.fromEntries(copyConfigRecordEntries(readPluginEntries(cfg))),
+        ...copyPluginEntriesConfig(readPluginEntries(cfg)),
         [entry.pluginId]: {
-          ...Object.fromEntries(copyConfigRecordEntries(readPluginEntry(cfg, entry.pluginId))),
+          ...copyPluginEntryConfig(readPluginEntry(cfg, entry.pluginId)),
           enabled: true,
         },
       },

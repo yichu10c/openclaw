@@ -15,7 +15,7 @@ describe("resolveConfiguredProviderFallback", () => {
           },
         ),
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expect(
       resolveConfiguredProviderFallback({
@@ -45,7 +45,7 @@ describe("resolveConfiguredProviderFallback", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     expect(
       resolveConfiguredProviderFallback({

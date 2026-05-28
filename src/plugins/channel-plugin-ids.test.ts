@@ -746,7 +746,7 @@ describe("resolveGatewayStartupPluginIds", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       ["demo-channel", "browser", "google", "amazon-bedrock", "memory-core"],
     ],
     [
@@ -767,7 +767,7 @@ describe("resolveGatewayStartupPluginIds", () => {
             ),
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       ["demo-channel", "browser", "amazon-bedrock", "memory-core"],
     ],
     [
@@ -794,7 +794,7 @@ describe("resolveGatewayStartupPluginIds", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       ["demo-channel", "browser", "amazon-bedrock", "memory-core"],
     ],
     [

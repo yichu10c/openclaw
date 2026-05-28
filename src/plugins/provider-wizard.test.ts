@@ -321,7 +321,7 @@ describe("provider wizard boundaries", () => {
           throw new Error("mockplugin auth iterator failed");
         },
       },
-    ) satisfies ProviderPlugin["auth"];
+    ) as unknown as ProviderPlugin["auth"];
     const provider = makeProvider({
       id: "fuzzplugin",
       label: "Fuzz Plugin",

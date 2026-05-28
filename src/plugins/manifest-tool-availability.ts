@@ -33,6 +33,12 @@ function readRecordValue(record: unknown, key: string): unknown {
   return result.ok ? result.value : undefined;
 }
 
+function isManifestConfigAvailabilitySignal(
+  value: unknown,
+): value is ManifestConfigAvailabilitySignal {
+  return isRecord(value) && typeof readRecordValue(value, "rootPath") === "string";
+}
+
 function copyRecordEntries(value: unknown): Array<[string, unknown]> {
   if (!isRecord(value)) {
     return [];
@@ -152,7 +158,7 @@ function hasConfiguredSecretRefInConfigPath(params: {
     params.ref.provider,
   );
   if (params.ref.source !== "env") {
-    return Boolean(isRecord(providerConfig) && providerConfig.source === params.ref.source);
+    return isRecord(providerConfig) && providerConfig.source === params.ref.source;
   }
   if (!providerConfig) {
     return params.ref.provider === resolveDefaultSecretProviderAlias(params.config ?? {}, "env");
@@ -398,13 +404,18 @@ function toolMetadataPasses(params: {
 }): boolean {
   const authSignals = listToolAuthSignals(params.metadata);
   const configSignalEntries = readArrayField(params.metadata, "configSignals");
-  const configSignals = configSignalEntries.entries.filter(
-    (signal): signal is ManifestConfigAvailabilitySignal => isRecord(signal),
-  );
+  const configSignals: ManifestConfigAvailabilitySignal[] = [];
+  for (const signal of configSignalEntries.entries) {
+    if (isManifestConfigAvailabilitySignal(signal)) {
+      configSignals.push(signal);
+    }
+  }
+  const hasInvalidConfigSignals = configSignals.length !== configSignalEntries.entries.length;
   if (
     configSignals.length === 0 &&
     authSignals.signals.length === 0 &&
     configSignalEntries.ok &&
+    !hasInvalidConfigSignals &&
     !authSignals.unreadable
   ) {
     return true;
@@ -420,7 +431,7 @@ function toolMetadataPasses(params: {
   ) {
     return true;
   }
-  if (!configSignalEntries.ok || authSignals.unreadable) {
+  if (!configSignalEntries.ok || hasInvalidConfigSignals || authSignals.unreadable) {
     return false;
   }
   for (const signal of authSignals.signals) {
