@@ -78,6 +78,72 @@ type DefinedToolPluginTool = {
   ) => AnyAgentTool | AnyAgentTool[] | null | undefined;
 };
 
+type ToolPluginToolField = keyof DefinedToolPluginTool;
+
+function readToolPluginToolField(
+  tool: unknown,
+  key: ToolPluginToolField,
+): { readable: true; value: unknown } | { readable: false } {
+  try {
+    return {
+      readable: true,
+      value: (tool as Record<ToolPluginToolField, unknown>)[key],
+    };
+  } catch {
+    return { readable: false };
+  }
+}
+
+function requireReadableToolPluginToolField(
+  tool: unknown,
+  key: ToolPluginToolField,
+  owner: string,
+): unknown {
+  const read = readToolPluginToolField(tool, key);
+  if (!read.readable) {
+    throw new Error(`${owner} ${key} must be readable`);
+  }
+  return read.value;
+}
+
+function normalizeDefinedToolPluginTool(tool: unknown): DefinedToolPluginTool {
+  if (!tool || typeof tool !== "object") {
+    throw new Error("tool plugin tool must be an object");
+  }
+
+  const name = requireReadableToolPluginToolField(tool, "name", "tool plugin tool");
+  if (typeof name !== "string" || !name.trim()) {
+    throw new Error("tool plugin tool name must be a non-empty string");
+  }
+  const owner = `tool plugin tool ${name}`;
+  const label = requireReadableToolPluginToolField(tool, "label", owner);
+  if (label !== undefined && typeof label !== "string") {
+    throw new Error(`${owner} label must be a string`);
+  }
+  const description = requireReadableToolPluginToolField(tool, "description", owner);
+  if (typeof description !== "string") {
+    throw new Error(`${owner} description must be a string`);
+  }
+  const parameters = requireReadableToolPluginToolField(tool, "parameters", owner);
+  const optional = requireReadableToolPluginToolField(tool, "optional", owner);
+  const execute = requireReadableToolPluginToolField(tool, "execute", owner);
+  const factory = requireReadableToolPluginToolField(tool, "factory", owner);
+
+  return {
+    name,
+    label: label ?? name,
+    description,
+    parameters: parameters as TSchema,
+    optional: optional === true,
+    ...(typeof execute === "function"
+      ? { execute: execute as DefinedToolPluginTool["execute"] }
+      : {}),
+    ...(typeof factory === "function"
+      ? { factory: factory as DefinedToolPluginTool["factory"] }
+      : {}),
+  };
+}
+
 export type ToolPluginStaticToolMetadata = {
   name: string;
   label: string;
@@ -131,15 +197,8 @@ function assertJsonCompatibleSchemaObject(
 }
 
 function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> {
-  return ((definition: ToolPluginToolDefinition<TConfig, TSchema>) => ({
-    name: definition.name,
-    label: definition.label ?? definition.name,
-    description: definition.description,
-    parameters: definition.parameters,
-    optional: definition.optional === true,
-    execute: definition.execute as DefinedToolPluginTool["execute"],
-    factory: definition.factory as DefinedToolPluginTool["factory"],
-  })) as ToolPluginToolFactory<TConfig>;
+  return ((definition: ToolPluginToolDefinition<TConfig, TSchema>) =>
+    normalizeDefinedToolPluginTool(definition)) as ToolPluginToolFactory<TConfig>;
 }
 
 export function defineToolPlugin<TConfigSchema extends TSchema | undefined = undefined>(
@@ -151,7 +210,7 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
   const normalizedConfigSchema = pluginConfigSchema.jsonSchema ?? configSchema;
   const tools = [
     ...definition.tools(createToolPluginToolFactory<ToolPluginConfig<TConfigSchema>>()),
-  ];
+  ].map((tool) => normalizeDefinedToolPluginTool(tool));
   for (const tool of tools) {
     const toolName = typeof tool.name === "string" && tool.name.trim() ? tool.name : "<unnamed>";
     assertJsonCompatibleSchemaObject(tool.parameters, `tool plugin tool ${toolName} parameters`);

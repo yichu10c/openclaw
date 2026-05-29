@@ -297,4 +297,50 @@ describe("defineToolPlugin", () => {
       "tool plugin tool fuzz_move_angles parameters must be a JSON-compatible schema object: schema.properties.angle must be readable JSON-compatible data",
     );
   });
+
+  it("rejects unreadable tool names before metadata generation", () => {
+    const unreadableTool = {
+      description: "Move angles.",
+      parameters: Type.Object({ angle: Type.Number() }),
+      execute: () => "ok",
+    };
+    Object.defineProperty(unreadableTool, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin tool name exploded");
+      },
+    });
+
+    expect(() =>
+      defineToolPlugin({
+        id: "fuzzplugin",
+        name: "Fuzz Plugin",
+        description: "Fuzz plugin.",
+        tools: () => [unreadableTool as never],
+      }),
+    ).toThrow("tool plugin tool name must be readable");
+  });
+
+  it("rejects unreadable top-level parameter fields before metadata generation", () => {
+    const unreadableTool = {
+      name: "mock_move_angles",
+      description: "Move angles.",
+      execute: () => "ok",
+    };
+    Object.defineProperty(unreadableTool, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("mockplugin parameters exploded");
+      },
+    });
+
+    expect(() =>
+      defineToolPlugin({
+        id: "mockplugin",
+        name: "Mock Plugin",
+        description: "Mock plugin.",
+        tools: (tool) => [tool(unreadableTool as never)],
+      }),
+    ).toThrow("tool plugin tool mock_move_angles parameters must be readable");
+  });
 });
