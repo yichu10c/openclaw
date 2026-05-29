@@ -28,7 +28,7 @@ import {
   findUndeclaredPluginToolNames,
   normalizePluginToolContractNames,
 } from "./tool-contracts.js";
-import type { OpenClawPluginDefinition, OpenClawPluginModule } from "./types.js";
+import type { AnyAgentTool, OpenClawPluginDefinition, OpenClawPluginModule } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
 
@@ -133,6 +133,7 @@ function createCapabilityPluginRecord(params: {
   name?: string;
   description?: string;
   version?: string;
+  contracts?: PluginRecord["contracts"];
   source: string;
   rootDir?: string;
   workspaceDir?: string;
@@ -142,6 +143,7 @@ function createCapabilityPluginRecord(params: {
     name: params.name ?? params.id,
     version: params.version,
     description: params.description,
+    contracts: params.contracts,
     source: params.source,
     rootDir: params.rootDir,
     origin: "bundled",
@@ -192,6 +194,24 @@ function recordCapabilityLoadError(
     message: `failed to load plugin: ${message}`,
   });
   log.error(`[plugins] ${record.id} failed to load from ${record.source}: ${message}`);
+}
+
+function readCapturedPluginToolName(tool: AnyAgentTool): string {
+  try {
+    const name = tool.name;
+    return typeof name === "string" ? name.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+function pushUnreadableCapturedToolDiagnostic(registry: PluginRegistry, record: PluginRecord) {
+  registry.diagnostics.push({
+    level: "error",
+    pluginId: record.id,
+    source: record.source,
+    message: "plugin tool registration missing readable tool name",
+  });
 }
 
 export function loadBundledCapabilityRuntimeRegistry(params: {
@@ -265,6 +285,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       name: manifest.name,
       description: manifest.description,
       version: manifest.version,
+      contracts: manifest.contracts,
       source:
         env?.VITEST && params.pluginSdkResolution === "dist"
           ? (resolveBundledPluginRepoEntryPath({
@@ -348,7 +369,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
         ...captured.memoryEmbeddingProviders.map((entry) => entry.id),
       );
       record.agentHarnessIds.push(...captured.agentHarnesses.map((entry) => entry.id));
-      record.toolNames.push(...captured.tools.map((entry) => entry.name));
+      const capturedTools = captured.tools.flatMap((tool) => {
+        const name = readCapturedPluginToolName(tool);
+        if (!name) {
+          pushUnreadableCapturedToolDiagnostic(registry, record);
+          return [];
+        }
+        return [{ name, tool }];
+      });
+      record.toolNames.push(...capturedTools.map((entry) => entry.name));
 
       registry.cliBackends?.push(
         ...captured.cliBackends.map((backend) => ({
@@ -504,10 +533,10 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
         })),
       );
       const declaredToolNames = normalizePluginToolContractNames(record.contracts);
-      for (const tool of captured.tools) {
+      for (const { name, tool } of capturedTools) {
         const undeclared = findUndeclaredPluginToolNames({
           declaredNames: declaredToolNames,
-          toolNames: [tool.name],
+          toolNames: [name],
         });
         if (undeclared.length > 0) {
           registry.diagnostics.push({
@@ -522,7 +551,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           pluginId: record.id,
           pluginName: record.name,
           factory: () => tool,
-          names: [tool.name],
+          names: [name],
           declaredNames: declaredToolNames,
           optional: false,
           source: record.source,
