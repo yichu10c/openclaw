@@ -1,7 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { Type } from "typebox";
+import { describe, expect, it, vi } from "vitest";
 import { agentLoop, agentLoopContinue } from "./agent-loop.js";
-import type { Message, Model } from "./llm.js";
-import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, StreamFn } from "./types.js";
+import {
+  type AssistantMessage,
+  type AssistantMessageEvent,
+  EventStream,
+  type Message,
+  type Model,
+} from "./llm.js";
+import type {
+  AgentContext,
+  AgentEvent,
+  AgentLoopConfig,
+  AgentMessage,
+  AgentTool,
+  StreamFn,
+} from "./types.js";
 
 const model: Model = {
   id: "test-model",
@@ -43,6 +57,44 @@ function expectTerminalFailure(events: AgentEvent[], result: AgentMessage[]): vo
   });
 }
 
+function createAssistantStream(
+  message: AssistantMessage,
+): EventStream<AssistantMessageEvent, AssistantMessage> {
+  const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
+    (event) => event.type === "done" || event.type === "error",
+    (event) => (event.type === "done" ? event.message : event.error),
+  );
+  stream.push({ type: "done", reason: "toolUse", message });
+  return stream;
+}
+
+function createToolUseMessage(): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [
+      {
+        type: "toolCall",
+        id: "call_1",
+        name: "mockplugin_move_angles",
+        arguments: { angle: 42 },
+      },
+    ],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    stopReason: "toolUse",
+    timestamp: 2,
+    usage: {
+      input: 1,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 2,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+  };
+}
+
 describe("agentLoop EventStream failures", () => {
   it("ends the public stream when a new prompt run rejects", async () => {
     const stream = agentLoop(
@@ -70,5 +122,58 @@ describe("agentLoop EventStream failures", () => {
     const result = await stream.result();
 
     expectTerminalFailure(events, result);
+  });
+
+  it("executes healthy tools when a sibling tool name is unreadable", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "mock ok" }],
+      details: { ok: true },
+    }));
+    const unreadableTool = {
+      get name(): string {
+        throw new Error("fuzzplugin tool name exploded");
+      },
+      label: "Fuzz",
+      description: "Synthetic malformed sibling",
+      parameters: Type.Object({}),
+      execute: vi.fn(),
+    } as unknown as AgentTool;
+    const healthyTool: AgentTool = {
+      name: "mockplugin_move_angles",
+      label: "Move Angles",
+      description: "Synthetic healthy sibling",
+      parameters: Type.Object({ angle: Type.Number() }),
+      execute,
+    };
+    const streamFn: StreamFn = async () => createAssistantStream(createToolUseMessage());
+
+    const stream = agentLoop(
+      [{ role: "user", content: "move", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [unreadableTool, healthyTool] },
+      { ...config, shouldStopAfterTurn: () => true },
+      undefined,
+      streamFn,
+    );
+
+    const events = await collectEvents(stream);
+    const result = await stream.result();
+
+    expect(execute).toHaveBeenCalledWith("call_1", { angle: 42 }, undefined, expect.any(Function));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_execution_end",
+        toolCallId: "call_1",
+        toolName: "mockplugin_move_angles",
+        isError: false,
+      }),
+    );
+    expect(result.slice(1)).toEqual([
+      expect.objectContaining({ role: "assistant", stopReason: "toolUse" }),
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "mockplugin_move_angles",
+        isError: false,
+      }),
+    ]);
   });
 });

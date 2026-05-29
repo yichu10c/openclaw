@@ -1,6 +1,7 @@
 import { runAgentLoop } from "../agent-loop.js";
 import { type AssistantMessage, type ImageContent, type Model, type UserMessage } from "../llm.js";
 import { type AgentCoreRuntimeDeps, resolveAgentCoreStreamFn } from "../runtime-deps.js";
+import { buildUsableToolMap, collectUsableToolNames } from "../tool-name.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -239,13 +240,10 @@ export class AgentHarness<
     this.systemPrompt = options.systemPrompt;
     this.getApiKeyAndHeaders = options.getApiKeyAndHeaders;
     this.runtime = options.runtime;
-    for (const tool of options.tools ?? []) {
-      this.tools.set(tool.name, tool);
-    }
+    this.tools = buildUsableToolMap(options.tools ?? []);
     this.model = options.model;
     this.thinkingLevel = options.thinkingLevel ?? "off";
-    this.activeToolNames =
-      options.activeToolNames ?? (options.tools ?? []).map((tool) => tool.name);
+    this.activeToolNames = options.activeToolNames ?? collectUsableToolNames(options.tools ?? []);
     this.steeringQueueMode = options.steeringMode ?? "one-at-a-time";
     this.followUpQueueMode = options.followUpMode ?? "one-at-a-time";
   }
@@ -1108,7 +1106,7 @@ export class AgentHarness<
 
   async setTools(tools: TTool[], activeToolNames?: string[]): Promise<void> {
     try {
-      const nextTools = new Map(tools.map((tool) => [tool.name, tool]));
+      const nextTools = buildUsableToolMap(tools);
       const nextActiveToolNames = activeToolNames ? [...activeToolNames] : this.activeToolNames;
       this.validateToolNames(nextActiveToolNames, nextTools);
       this.tools = nextTools;

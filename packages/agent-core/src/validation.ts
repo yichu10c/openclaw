@@ -2,6 +2,7 @@ import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { Value } from "typebox/value";
 import type { Tool, ToolCall } from "./llm.js";
+import { findToolByName } from "./tool-name.js";
 
 const validatorCache = new WeakMap<object, ReturnType<typeof Compile>>();
 const TYPEBOX_KIND = Symbol.for("TypeBox.Kind");
@@ -282,7 +283,7 @@ function formatValidationPath(error: TLocalizedValidationError): string {
 }
 
 export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
-  const tool = tools.find((t) => t.name === toolCall.name);
+  const tool = findToolByName(tools, toolCall.name);
   if (!tool) {
     throw new Error(`Tool "${toolCall.name}" not found`);
   }

@@ -1,6 +1,7 @@
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import type { Tool } from "./llm.js";
-import { validateToolArguments } from "./validation.js";
+import type { Tool, ToolCall } from "./llm.js";
+import { validateToolArguments, validateToolCall } from "./validation.js";
 
 const decimalTool = {
   name: "decimal-tool",
@@ -37,5 +38,32 @@ describe("validateToolArguments", () => {
         arguments: { amount: "0x10", count: "0b10" },
       }),
     ).toThrow(/Validation failed for tool "decimal-tool"/);
+  });
+});
+
+describe("validateToolCall", () => {
+  it("validates a healthy tool when a sibling tool name is unreadable", () => {
+    const unreadableTool = {
+      get name(): string {
+        throw new Error("fuzzplugin tool name exploded");
+      },
+      description: "Synthetic malformed sibling",
+      parameters: Type.Object({}),
+    } as unknown as Tool;
+    const healthyTool: Tool = {
+      name: "mockplugin_move_angles",
+      description: "Synthetic healthy sibling",
+      parameters: Type.Object({ angle: Type.Number() }),
+    };
+    const toolCall: ToolCall = {
+      type: "toolCall",
+      id: "call_1",
+      name: "mockplugin_move_angles",
+      arguments: { angle: 42 },
+    };
+
+    expect(validateToolCall([unreadableTool, healthyTool], toolCall)).toEqual({
+      angle: 42,
+    });
   });
 });

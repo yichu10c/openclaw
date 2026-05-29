@@ -5,6 +5,7 @@
 
 import { type AssistantMessage, type Context, EventStream, type ToolResultMessage } from "./llm.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
+import { findToolByName } from "./tool-name.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -52,11 +53,13 @@ export function agentLoop(
     signal,
     streamFn,
     runtime,
-  ).then((messages) => {
-    stream.end(messages);
-  }).catch((error) => {
-    pushLoopFailure(stream, config, error, signal?.aborted === true);
-  });
+  )
+    .then((messages) => {
+      stream.end(messages);
+    })
+    .catch((error) => {
+      pushLoopFailure(stream, config, error, signal?.aborted === true);
+    });
 
   return stream;
 }
@@ -95,11 +98,13 @@ export function agentLoopContinue(
     signal,
     streamFn,
     runtime,
-  ).then((messages) => {
-    stream.end(messages);
-  }).catch((error) => {
-    pushLoopFailure(stream, config, error, signal?.aborted === true);
-  });
+  )
+    .then((messages) => {
+      stream.end(messages);
+    })
+    .catch((error) => {
+      pushLoopFailure(stream, config, error, signal?.aborted === true);
+    });
 
   return stream;
 }
@@ -441,7 +446,7 @@ async function executeToolCalls(
 ): Promise<ExecutedToolCallBatch> {
   const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
   const hasSequentialToolCall = toolCalls.some(
-    (tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
+    (tc) => findToolByName(currentContext.tools, tc.name)?.executionMode === "sequential",
   );
   if (config.toolExecution === "sequential" || hasSequentialToolCall) {
     return executeToolCallsSequential(
@@ -657,7 +662,7 @@ async function prepareToolCall(
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
-  const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
+  const tool = findToolByName(currentContext.tools, toolCall.name);
   if (!tool) {
     return {
       kind: "immediate",
