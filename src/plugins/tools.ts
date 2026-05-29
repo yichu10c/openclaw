@@ -1229,13 +1229,14 @@ export function resolvePluginTools(params: {
       });
       if (manifestPlugin) {
         const capturedDescriptors = capturedDescriptorsByPluginId.get(entry.pluginId) ?? [];
-        capturedDescriptors.push(
-          capturePluginToolDescriptor({
-            pluginId: entry.pluginId,
-            tool,
-            optional,
-          }),
-        );
+        const capturedDescriptor = capturePluginToolDescriptor({
+          pluginId: entry.pluginId,
+          tool,
+          optional,
+        });
+        if (capturedDescriptor) {
+          capturedDescriptors.push(capturedDescriptor);
+        }
         capturedDescriptorsByPluginId.set(entry.pluginId, capturedDescriptors);
       }
       tools.push(tool);

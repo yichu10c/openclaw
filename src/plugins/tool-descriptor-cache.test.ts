@@ -16,6 +16,7 @@ vi.mock("../config/runtime-snapshot.js", () => ({
 
 import {
   buildPluginToolDescriptorCacheKey,
+  capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   resetPluginToolDescriptorCache,
 } from "./tool-descriptor-cache.js";
@@ -265,5 +266,93 @@ describe("plugin tool descriptor cache keys", () => {
     });
 
     expect(firstKey).toBe(secondKey);
+  });
+
+  it("omits uncapturable plugin tool descriptors without throwing", () => {
+    const unreadableName = {
+      description: "Unreadable name",
+      parameters: { type: "object", properties: {} },
+    };
+    Object.defineProperty(unreadableName, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin descriptor name is unreadable");
+      },
+    });
+    const unreadableParameters = {
+      name: "mockplugin_unreadable_parameters",
+      description: "Unreadable parameters",
+    };
+    Object.defineProperty(unreadableParameters, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin descriptor parameters are unreadable");
+      },
+    });
+    const nonJsonParameters = {
+      name: "mockplugin_bigint_parameters",
+      description: "Non-json parameters",
+      parameters: {
+        type: "object",
+        properties: {
+          count: { const: 1n },
+        },
+      },
+    };
+
+    expect(
+      capturePluginToolDescriptor({
+        pluginId: "fuzzplugin",
+        tool: unreadableName as never,
+        optional: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      capturePluginToolDescriptor({
+        pluginId: "fuzzplugin",
+        tool: unreadableParameters as never,
+        optional: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      capturePluginToolDescriptor({
+        pluginId: "fuzzplugin",
+        tool: nonJsonParameters as never,
+        optional: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("captures healthy plugin tool descriptors while omitting unreadable summaries", () => {
+    const tool = {
+      name: "mockplugin_lookup",
+      label: "Mock lookup",
+      description: "Lookup mock data",
+      parameters: { type: "object", properties: {} },
+    };
+    Object.defineProperty(tool, "displaySummary", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin display summary is unreadable");
+      },
+    });
+
+    expect(
+      capturePluginToolDescriptor({
+        pluginId: "mockplugin",
+        tool: tool as never,
+        optional: true,
+      }),
+    ).toEqual({
+      optional: true,
+      descriptor: {
+        name: "mockplugin_lookup",
+        title: "Mock lookup",
+        description: "Lookup mock data",
+        inputSchema: { type: "object", properties: {} },
+        owner: { kind: "plugin", pluginId: "mockplugin" },
+        executor: { kind: "plugin", pluginId: "mockplugin", toolName: "mockplugin_lookup" },
+      },
+    });
   });
 });

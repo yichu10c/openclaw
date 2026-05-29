@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { projectRuntimeToolInputSchema } from "../agents/tool-schema-projection.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { JsonObject, ToolDescriptor } from "../tools/types.js";
@@ -19,6 +20,7 @@ let descriptorCacheObjectIds = new WeakMap<object, number>();
 let nextDescriptorCacheObjectId = 1;
 
 export type PluginToolDescriptorConfigCacheKeyMemo = WeakMap<object, string | number | null>;
+type ToolDescriptorPropertyRead = { readable: true; value: unknown } | { readable: false };
 
 export function createPluginToolDescriptorConfigCacheKeyMemo(): PluginToolDescriptorConfigCacheKeyMemo {
   return new WeakMap();
@@ -192,27 +194,58 @@ export function buildPluginToolDescriptorCacheKey(params: {
   });
 }
 
-function asJsonObject(value: unknown): JsonObject {
-  return value as JsonObject;
+function readToolDescriptorProperty(
+  tool: AnyAgentTool,
+  key: "name" | "label" | "displaySummary" | "description" | "parameters",
+): ToolDescriptorPropertyRead {
+  try {
+    return { readable: true, value: (tool as Record<string, unknown>)[key] };
+  } catch {
+    return { readable: false };
+  }
 }
 
 export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
   optional: boolean;
-}): CachedPluginToolDescriptor {
-  const label = (params.tool as { label?: unknown }).label;
-  const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
+}): CachedPluginToolDescriptor | undefined {
+  const name = readToolDescriptorProperty(params.tool, "name");
+  if (!name.readable || typeof name.value !== "string" || !name.value.trim()) {
+    return undefined;
+  }
+  const description = readToolDescriptorProperty(params.tool, "description");
+  if (!description.readable || typeof description.value !== "string") {
+    return undefined;
+  }
+  const parameters = readToolDescriptorProperty(params.tool, "parameters");
+  if (!parameters.readable) {
+    return undefined;
+  }
+  const inputSchema = projectRuntimeToolInputSchema(parameters.value, `${name.value}.parameters`);
+  if (inputSchema.violations.length > 0) {
+    return undefined;
+  }
+  const label = readToolDescriptorProperty(params.tool, "label");
+  const title =
+    label.readable && typeof label.value === "string" && label.value.trim()
+      ? label.value.trim()
+      : undefined;
+  const displaySummary = readToolDescriptorProperty(params.tool, "displaySummary");
   return {
-    ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
+    ...(displaySummary.readable &&
+    typeof displaySummary.value === "string" &&
+    displaySummary.value.trim()
+      ? { displaySummary: displaySummary.value }
+      : {}),
     optional: params.optional,
     descriptor: {
-      name: params.tool.name,
+      name: name.value,
       ...(title ? { title } : {}),
-      description: params.tool.description,
-      inputSchema: asJsonObject(params.tool.parameters),
+      description: description.value,
+      inputSchema: inputSchema.schema as JsonObject,
       owner: { kind: "plugin", pluginId: params.pluginId },
-      executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
+      executor: { kind: "plugin", pluginId: params.pluginId, toolName: name.value },
     },
   };
 }
