@@ -11,6 +11,15 @@ type ToolWithParameters = {
   parameters: unknown;
 };
 
+type ToolParametersRead =
+  | {
+      ok: true;
+      value: unknown;
+    }
+  | {
+      ok: false;
+    };
+
 function resolveToolSchemaModelCompat(
   compat: ToolSchemaCompatInput | null | undefined,
 ): ModelCompatConfig | undefined {
@@ -111,21 +120,59 @@ type OpenAIStrictToolSchemaDiagnostic = {
   violations: string[];
 };
 
+function readOpenAIToolName(tool: ToolWithParameters): string | undefined {
+  try {
+    const name = tool.name;
+    return typeof name === "string" && name ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readOpenAIToolParameters(tool: ToolWithParameters): ToolParametersRead {
+  try {
+    return { ok: true, value: tool.parameters };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function formatOpenAIToolSchemaDiagnosticPath(toolName: string | undefined, toolIndex: number) {
+  return `${toolName ?? `tool[${toolIndex}]`}.parameters`;
+}
+
 export function findOpenAIStrictToolSchemaDiagnostics(
   tools: readonly ToolWithParameters[],
 ): OpenAIStrictToolSchemaDiagnostic[] {
   return tools.flatMap((tool, toolIndex) => {
-    const violations = findStrictOpenAIJsonSchemaViolations(
-      normalizeStrictOpenAIJsonSchema(tool.parameters),
-      `${typeof tool.name === "string" && tool.name ? tool.name : `tool[${toolIndex}]`}.parameters`,
-    );
+    const toolName = readOpenAIToolName(tool);
+    const diagnosticPath = formatOpenAIToolSchemaDiagnosticPath(toolName, toolIndex);
+    const parameters = readOpenAIToolParameters(tool);
+    if (!parameters.ok) {
+      return [
+        {
+          toolIndex,
+          ...(toolName ? { toolName } : {}),
+          violations: [diagnosticPath],
+        },
+      ];
+    }
+    let violations: string[];
+    try {
+      violations = findStrictOpenAIJsonSchemaViolations(
+        normalizeStrictOpenAIJsonSchema(parameters.value),
+        diagnosticPath,
+      );
+    } catch {
+      violations = [diagnosticPath];
+    }
     if (violations.length === 0) {
       return [];
     }
     return [
       {
         toolIndex,
-        ...(typeof tool.name === "string" && tool.name ? { toolName: tool.name } : {}),
+        ...(toolName ? { toolName } : {}),
         violations,
       },
     ];
@@ -252,5 +299,15 @@ export function resolveOpenAIStrictToolFlagForInventory(
   if (strict !== true) {
     return strict === false ? false : undefined;
   }
-  return tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
+  return tools.every((tool) => {
+    const parameters = readOpenAIToolParameters(tool);
+    if (!parameters.ok) {
+      return false;
+    }
+    try {
+      return isStrictOpenAIJsonSchemaCompatible(parameters.value);
+    } catch {
+      return false;
+    }
+  });
 }

@@ -3828,6 +3828,181 @@ describe("openai transport stream", () => {
     expect(first.tools).toEqual(second.tools);
   });
 
+  it("omits unreadable OpenAI transport tools and preserves healthy siblings", () => {
+    const responsesModel = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+    const completionsModel = {
+      ...responsesModel,
+      id: "gpt-5",
+      name: "GPT-5",
+      api: "openai-completions",
+    } satisfies Model<"openai-completions">;
+    const unreadableNameTool = Object.defineProperty(
+      {
+        description: "Bad name",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      },
+      "name",
+      {
+        get() {
+          throw new Error("fuzzplugin name exploded");
+        },
+      },
+    );
+    const unreadableParametersTool = Object.defineProperty(
+      {
+        name: "fuzzplugin_unreadable_parameters",
+        description: "Bad parameters",
+        parameters: undefined as unknown,
+      },
+      "parameters",
+      {
+        get() {
+          throw new Error("fuzzplugin parameters exploded");
+        },
+      },
+    );
+    const unreadableNestedSchemaTool = {
+      name: "fuzzplugin_nested_schema",
+      description: "Bad nested schema",
+      parameters: Object.defineProperty({ type: "object" }, "properties", {
+        enumerable: true,
+        get() {
+          throw new Error("fuzzplugin schema exploded");
+        },
+      }),
+    };
+    const unreadableDescriptionTool = Object.defineProperty(
+      {
+        name: "fuzzplugin_unreadable_description",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+      },
+      "description",
+      {
+        get() {
+          throw new Error("fuzzplugin description exploded");
+        },
+      },
+    );
+    const healthyTool = {
+      name: "mockplugin_lookup",
+      description: "Healthy lookup",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    };
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [
+        unreadableNameTool,
+        healthyTool,
+        unreadableParametersTool,
+        unreadableNestedSchemaTool,
+        unreadableDescriptionTool,
+      ],
+    } as never;
+
+    const responsesParams = buildOpenAIResponsesParams(responsesModel, context, undefined) as {
+      tools?: Array<{ name?: string; description?: string }>;
+    };
+    const completionsParams = buildOpenAICompletionsParams(
+      completionsModel,
+      context,
+      undefined,
+    ) as { tools?: Array<{ function?: { name?: string; description?: string } }> };
+
+    expect(responsesParams.tools?.map((tool) => tool.name)).toEqual([
+      "fuzzplugin_unreadable_description",
+      "mockplugin_lookup",
+    ]);
+    expect(responsesParams.tools?.[0]?.description).toBeUndefined();
+    expect(completionsParams.tools?.map((tool) => tool.function?.name)).toEqual([
+      "fuzzplugin_unreadable_description",
+      "mockplugin_lookup",
+    ]);
+    expect(completionsParams.tools?.[0]?.function?.description).toBeUndefined();
+
+    const droppedResponsesChoice = buildOpenAIResponsesParams(responsesModel, context, {
+      toolChoice: { type: "function", name: "fuzzplugin_unreadable_parameters" },
+    } as never) as { tool_choice?: unknown };
+    const droppedCompletionsChoice = buildOpenAICompletionsParams(completionsModel, context, {
+      toolChoice: {
+        type: "function",
+        function: { name: "fuzzplugin_unreadable_parameters" },
+      },
+    }) as { tool_choice?: unknown };
+    const healthyResponsesChoice = buildOpenAIResponsesParams(responsesModel, context, {
+      toolChoice: { type: "function", name: "mockplugin_lookup" },
+    } as never) as { tool_choice?: unknown };
+    const allowedResponsesChoice = buildOpenAIResponsesParams(responsesModel, context, {
+      toolChoice: {
+        type: "allowed_tools",
+        mode: "auto",
+        tools: [
+          { type: "function", name: "fuzzplugin_unreadable_parameters" },
+          { type: "function", name: "mockplugin_lookup" },
+        ],
+      },
+    } as never) as { tool_choice?: unknown };
+    const droppedAllowedResponsesChoice = buildOpenAIResponsesParams(responsesModel, context, {
+      toolChoice: {
+        type: "allowed_tools",
+        mode: "auto",
+        tools: [{ type: "function", name: "fuzzplugin_unreadable_parameters" }],
+      },
+    } as never) as { tool_choice?: unknown };
+    const healthyCompletionsChoice = buildOpenAICompletionsParams(completionsModel, context, {
+      toolChoice: { type: "function", function: { name: "mockplugin_lookup" } },
+    }) as { tool_choice?: unknown };
+    const invalidOnlyContext = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [unreadableParametersTool],
+    } as never;
+    const invalidOnlyResponsesChoice = buildOpenAIResponsesParams(
+      responsesModel,
+      invalidOnlyContext,
+      {
+        toolChoice: "required",
+      } as never,
+    ) as { tool_choice?: unknown };
+    const invalidOnlyCompletionsChoice = buildOpenAICompletionsParams(
+      completionsModel,
+      invalidOnlyContext,
+      {
+        toolChoice: "required",
+      },
+    ) as { tool_choice?: unknown };
+
+    expect(droppedResponsesChoice).not.toHaveProperty("tool_choice");
+    expect(droppedCompletionsChoice).not.toHaveProperty("tool_choice");
+    expect(invalidOnlyResponsesChoice).not.toHaveProperty("tool_choice");
+    expect(invalidOnlyCompletionsChoice).not.toHaveProperty("tool_choice");
+    expect(healthyResponsesChoice.tool_choice).toEqual({
+      type: "function",
+      name: "mockplugin_lookup",
+    });
+    expect(allowedResponsesChoice.tool_choice).toEqual({
+      type: "allowed_tools",
+      mode: "auto",
+      tools: [{ type: "function", name: "mockplugin_lookup" }],
+    });
+    expect(droppedAllowedResponsesChoice).not.toHaveProperty("tool_choice");
+    expect(healthyCompletionsChoice.tool_choice).toEqual({
+      type: "function",
+      function: { name: "mockplugin_lookup" },
+    });
+  });
+
   it("falls back to strict:false when a native OpenAI tool schema is not strict-compatible", () => {
     const params = buildOpenAIResponsesParams(
       {

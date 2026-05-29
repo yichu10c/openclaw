@@ -109,6 +109,21 @@ type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & {
   [OPENAI_RESPONSES_REASONING_REPLAY_META_KEY]?: OpenAIResponsesReasoningReplayMetadata;
 };
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
+type TransportToolInput = NonNullable<Context["tools"]>[number];
+type ProjectedOpenAITransportTool = {
+  name: string;
+  description?: string;
+  parameters: unknown;
+};
+type OpenAITransportToolChoice = string | Record<string, unknown>;
+type TransportToolParametersRead =
+  | {
+      ok: true;
+      value: unknown;
+    }
+  | {
+      ok: false;
+    };
 
 type BaseStreamOptions = {
   temperature?: number;
@@ -1216,30 +1231,37 @@ function convertResponsesTools(
   model: OpenAIModeModel,
   options?: { strict?: boolean | null },
 ): FunctionTool[] {
-  const strict = resolveOpenAIStrictToolFlagWithDiagnostics(tools, options?.strict, {
+  const projectedTools = projectOpenAITransportTools(tools, model);
+  const strict = resolveOpenAIStrictToolFlagWithDiagnostics(projectedTools, options?.strict, {
     transport: "responses",
     model,
   });
-  return sortTransportToolsByName(tools).map((tool): FunctionTool => {
+  return sortTransportToolsByName(projectedTools).flatMap((tool): FunctionTool[] => {
+    let parameters: Record<string, unknown>;
+    try {
+      parameters = normalizeOpenAIStrictToolParameters(
+        tool.parameters,
+        strict === true,
+        model.compat,
+      ) as Record<string, unknown>;
+    } catch {
+      return [];
+    }
     const result = {
       type: "function" as const,
       name: tool.name,
       description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(
-        tool.parameters,
-        strict === true,
-        model.compat,
-      ) as Record<string, unknown>,
+      parameters,
     } as FunctionTool;
     if (strict !== undefined) {
       result.strict = strict;
     }
-    return result;
+    return [result];
   });
 }
 
 function resolveOpenAIStrictToolFlagWithDiagnostics(
-  tools: NonNullable<Context["tools"]>,
+  tools: readonly { name?: unknown; parameters: unknown }[],
   strictSetting: boolean | null | undefined,
   context: { transport: "responses" | "completions"; model: OpenAIModeModel },
 ): boolean | undefined {
@@ -2103,13 +2125,18 @@ export function buildOpenAIResponsesParams(
     params.service_tier = options.serviceTier;
   }
   if (context.tools) {
-    params.tools = convertResponsesTools(context.tools, model as OpenAIModeModel, {
+    const tools = convertResponsesTools(context.tools, model as OpenAIModeModel, {
       strict: resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
         transport: "stream",
       }),
     });
-    if (options?.toolChoice) {
-      params.tool_choice = options.toolChoice;
+    params.tools = tools;
+    const toolChoice = resolveForwardedOpenAIToolChoice(
+      options?.toolChoice,
+      collectResponsesToolNames(tools),
+    );
+    if (toolChoice !== undefined) {
+      params.tool_choice = toolChoice as ResponseCreateParamsStreaming["tool_choice"];
     }
   }
   if (model.reasoning) {
@@ -3159,8 +3186,9 @@ function convertTools(
   compat: ReturnType<typeof getCompat>,
   model: OpenAIModeModel,
 ) {
+  const projectedTools = projectOpenAITransportTools(tools, model);
   const strict = resolveOpenAIStrictToolFlagWithDiagnostics(
-    tools,
+    projectedTools,
     resolveOpenAIStrictToolSetting(model, {
       transport: "stream",
       supportsStrictMode: compat?.supportsStrictMode,
@@ -3170,7 +3198,17 @@ function convertTools(
       model,
     },
   );
-  return sortTransportToolsByName(tools).map((tool) => {
+  return sortTransportToolsByName(projectedTools).flatMap((tool) => {
+    let parameters: ReturnType<typeof normalizeOpenAIStrictToolParameters>;
+    try {
+      parameters = normalizeOpenAIStrictToolParameters(
+        tool.parameters,
+        strict === true,
+        model.compat,
+      );
+    } catch {
+      return [];
+    }
     const functionTool: {
       name: string;
       description: string | undefined;
@@ -3179,11 +3217,7 @@ function convertTools(
     } = {
       name: tool.name,
       description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(
-        tool.parameters,
-        strict === true,
-        model.compat,
-      ),
+      parameters,
     };
     if (strict !== undefined) {
       functionTool.strict = strict;
@@ -3192,6 +3226,60 @@ function convertTools(
       type: "function",
       function: functionTool,
     };
+  });
+}
+
+function readOpenAITransportToolName(tool: TransportToolInput): string | undefined {
+  try {
+    const name = tool.name;
+    return typeof name === "string" && name ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readOpenAITransportToolDescription(tool: TransportToolInput): string | undefined {
+  try {
+    const description = tool.description;
+    return typeof description === "string" ? description : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readOpenAITransportToolParameters(tool: TransportToolInput): TransportToolParametersRead {
+  try {
+    return { ok: true, value: tool.parameters };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function projectOpenAITransportTools(
+  tools: NonNullable<Context["tools"]>,
+  model: OpenAIModeModel,
+): ProjectedOpenAITransportTool[] {
+  return tools.flatMap((tool): ProjectedOpenAITransportTool[] => {
+    const name = readOpenAITransportToolName(tool);
+    if (!name) {
+      return [];
+    }
+    const parameters = readOpenAITransportToolParameters(tool);
+    if (!parameters.ok) {
+      return [];
+    }
+    try {
+      normalizeOpenAIStrictToolParameters(parameters.value, false, model.compat);
+    } catch {
+      return [];
+    }
+    return [
+      {
+        name,
+        description: readOpenAITransportToolDescription(tool),
+        parameters: parameters.value,
+      },
+    ];
   });
 }
 
@@ -3578,9 +3666,14 @@ export function buildOpenAICompletionsParams(
   }
   if (supportsModelTools(model)) {
     if (context.tools) {
-      params.tools = convertTools(context.tools, compat, model);
-      if (options?.toolChoice) {
-        params.tool_choice = options.toolChoice;
+      const tools = convertTools(context.tools, compat, model);
+      params.tools = tools;
+      const toolChoice = resolveForwardedOpenAIToolChoice(
+        options?.toolChoice,
+        collectCompletionsToolNames(tools),
+      );
+      if (toolChoice !== undefined) {
+        params.tool_choice = toolChoice;
       } else if (
         compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
         Array.isArray(params.tools) &&
@@ -3718,6 +3811,109 @@ function mapStopReason(reason: string | null) {
         stopReason: "error",
         errorMessage: `Provider finish_reason: ${reason}`,
       };
+  }
+}
+
+function collectResponsesToolNames(tools: readonly FunctionTool[]): Set<string> {
+  return new Set(
+    tools.flatMap((tool) => (typeof tool.name === "string" && tool.name ? [tool.name] : [])),
+  );
+}
+
+function collectCompletionsToolNames(tools: readonly unknown[]): Set<string> {
+  return new Set(
+    tools.flatMap((tool) => {
+      if (!isRecord(tool)) {
+        return [];
+      }
+      const functionTool = tool.function;
+      if (!isRecord(functionTool)) {
+        return [];
+      }
+      const name = functionTool.name;
+      return typeof name === "string" && name ? [name] : [];
+    }),
+  );
+}
+
+function resolveForwardedOpenAIToolChoice(
+  toolChoice: unknown,
+  availableToolNames: ReadonlySet<string>,
+): OpenAITransportToolChoice | undefined {
+  if (!toolChoice || availableToolNames.size === 0) {
+    return undefined;
+  }
+  if (typeof toolChoice === "string") {
+    return toolChoice;
+  }
+  if (!isRecord(toolChoice)) {
+    return undefined;
+  }
+  if (isOpenAIAllowedToolsChoice(toolChoice)) {
+    return resolveOpenAIAllowedToolsChoice(toolChoice, availableToolNames);
+  }
+  const toolName = readOpenAIFunctionToolChoiceName(toolChoice);
+  return !toolName || availableToolNames.has(toolName) ? toolChoice : undefined;
+}
+
+function isOpenAIAllowedToolsChoice(toolChoice: unknown): boolean {
+  try {
+    return isRecord(toolChoice) && toolChoice.type === "allowed_tools";
+  } catch {
+    return false;
+  }
+}
+
+function resolveOpenAIAllowedToolsChoice(
+  toolChoice: unknown,
+  availableToolNames: ReadonlySet<string>,
+): OpenAITransportToolChoice | undefined {
+  try {
+    if (!isRecord(toolChoice) || toolChoice.type !== "allowed_tools") {
+      return undefined;
+    }
+    const tools = toolChoice.tools;
+    if (!Array.isArray(tools)) {
+      return undefined;
+    }
+    let sawNamedFunctionTool = false;
+    const filteredTools = tools.flatMap((tool): unknown[] => {
+      if (!isRecord(tool) || tool.type !== "function") {
+        return [tool];
+      }
+      const name = tool.name;
+      if (typeof name !== "string" || !name) {
+        return [];
+      }
+      sawNamedFunctionTool = true;
+      return availableToolNames.has(name) ? [tool] : [];
+    });
+    if (filteredTools.length === 0 || (sawNamedFunctionTool && filteredTools.length === 0)) {
+      return undefined;
+    }
+    return { ...toolChoice, tools: filteredTools };
+  } catch {
+    return undefined;
+  }
+}
+
+function readOpenAIFunctionToolChoiceName(toolChoice: unknown): string | undefined {
+  try {
+    if (!isRecord(toolChoice) || toolChoice.type !== "function") {
+      return undefined;
+    }
+    const directName = toolChoice.name;
+    if (typeof directName === "string" && directName) {
+      return directName;
+    }
+    const functionChoice = toolChoice.function;
+    if (!isRecord(functionChoice)) {
+      return undefined;
+    }
+    const name = functionChoice.name;
+    return typeof name === "string" && name ? name : undefined;
+  } catch {
+    return undefined;
   }
 }
 
