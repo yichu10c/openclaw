@@ -162,6 +162,36 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).toContain("Subagent-only command guidance.");
   });
 
+  it("omits unreadable synthetic tool names while preserving readable prompt tools", () => {
+    const unreadableTool: Record<string, unknown> = {};
+    Object.defineProperty(unreadableTool, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin embedded prompt name read failed");
+      },
+    });
+
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      promptSurface: "subagent",
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [unreadableTool, { name: "sessions_spawn" }] as never,
+      modelAliasLines: [],
+      userTimezone: "UTC",
+    });
+
+    expect(prompt).toContain("- sessions_spawn");
+    expect(prompt).not.toContain("fuzzplugin embedded prompt name read failed");
+  });
+
   it("can omit base memory guidance for non-legacy context engines", () => {
     registerMemoryPromptSection(() => ["## Memory Recall", "Use memory carefully.", ""]);
 

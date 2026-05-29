@@ -15,6 +15,21 @@ import type { PromptMode, SilentReplyPromptMode } from "../system-prompt.types.j
 import type { EmbeddedSandboxInfo } from "./types.js";
 import type { ReasoningLevel, ThinkLevel } from "./utils.js";
 
+function readEmbeddedToolNames(tools: readonly AgentTool[]): string[] {
+  const names: string[] = [];
+  for (const tool of tools) {
+    try {
+      const name = typeof tool.name === "string" ? tool.name.trim() : "";
+      if (name) {
+        names.push(name);
+      }
+    } catch {
+      // Prompt rendering is best-effort; malformed descriptors are filtered elsewhere.
+    }
+  }
+  return names;
+}
+
 export function buildEmbeddedSystemPrompt(params: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -108,7 +123,7 @@ export function buildEmbeddedSystemPrompt(params: {
     runtimeInfo: params.runtimeInfo,
     messageToolHints: params.messageToolHints,
     sandboxInfo: params.sandboxInfo,
-    toolNames: params.tools.map((tool) => tool.name),
+    toolNames: readEmbeddedToolNames(params.tools),
     modelAliasLines: params.modelAliasLines,
     userTimezone: params.userTimezone,
     userTime: params.userTime,
