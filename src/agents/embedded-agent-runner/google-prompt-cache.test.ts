@@ -108,6 +108,14 @@ function fetchUrl(fetchMock: { mock: { calls: unknown[][] } }, callIndex = 0): s
   return String(callArg(fetchMock, callIndex, 0));
 }
 
+function fetchJsonBody(fetchMock: { mock: { calls: unknown[][] } }, callIndex = 0) {
+  const body = fetchInit(fetchMock, callIndex).body;
+  if (typeof body !== "string") {
+    throw new Error(`expected string body for fetch call ${callIndex}`);
+  }
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
 function streamContext(streamFn: { mock: { calls: unknown[][] } }, callIndex = 0) {
   return callArg(streamFn, callIndex, 1) as {
     systemPrompt?: unknown;
@@ -141,6 +149,53 @@ function preparePromptCacheStream(params: {
       now: () => params.now,
     },
   );
+}
+
+function makeFuzzGooglePromptCacheTools(): unknown[] {
+  const unreadableName = Object.defineProperty(
+    {
+      description: "unreadable name",
+      parameters: { type: "object", properties: {} },
+    },
+    "name",
+    {
+      get() {
+        throw new Error("fuzzplugin prompt cache tool name exploded");
+      },
+    },
+  );
+  const unreadableParameters = Object.defineProperty(
+    {
+      name: "fuzzplugin_unreadable_parameters",
+      description: "unreadable parameters",
+      parameters: undefined,
+    },
+    "parameters",
+    {
+      get() {
+        throw new Error("fuzzplugin prompt cache parameters exploded");
+      },
+    },
+  );
+  const unsupportedDynamicSchema = {
+    name: "fuzzplugin_dynamic_schema",
+    description: "unsupported schema",
+    parameters: { type: "object", properties: { target: { $dynamicRef: "#target" } } },
+  };
+  const unreadableDescription = Object.defineProperty(
+    {
+      name: "mockplugin_unreadable_description",
+      description: undefined,
+      parameters: { type: "object", properties: { query: { type: "string" } } },
+    },
+    "description",
+    {
+      get() {
+        throw new Error("fuzzplugin prompt cache description exploded");
+      },
+    },
+  );
+  return [unreadableName, unreadableParameters, unsupportedDynamicSchema, unreadableDescription];
 }
 
 describe("google prompt cache", () => {
@@ -245,6 +300,118 @@ describe("google prompt cache", () => {
         },
       },
     ]);
+  });
+
+  it("omits unreadable Google prompt-cache tools and stale tool choices", async () => {
+    const now = 1_500_000;
+    const expireTime = new Date(now + 3_600_000).toISOString();
+    const sessionManager = makeSessionManager();
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/system-cache-fuzz",
+      expireTime,
+    });
+    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        {
+          systemPrompt: "Follow policy.",
+          messages: [],
+          tools: [
+            ...makeFuzzGooglePromptCacheTools(),
+            {
+              name: "mockplugin_lookup",
+              description: "valid schema",
+              parameters: {
+                type: "object",
+                properties: {
+                  query: { type: "string" },
+                },
+                required: ["query"],
+              },
+            },
+          ],
+        } as never,
+        {
+          toolChoice: { type: "function", function: { name: "fuzzplugin_dynamic_schema" } },
+        } as never,
+      ),
+    );
+
+    const createBody = fetchJsonBody(fetchMock);
+    expect(createBody.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "mockplugin_unreadable_description",
+            parametersJsonSchema: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+            },
+          },
+          {
+            name: "mockplugin_lookup",
+            description: "valid schema",
+            parametersJsonSchema: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+              required: ["query"],
+            },
+          },
+        ],
+      },
+    ]);
+    expect(createBody).not.toHaveProperty("toolConfig");
+    expect(streamContext(innerStreamFn).tools).toBeUndefined();
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-fuzz");
+  });
+
+  it("omits Google prompt-cache tool metadata when every tool is quarantined", async () => {
+    const now = 1_600_000;
+    const expireTime = new Date(now + 3_600_000).toISOString();
+    const sessionManager = makeSessionManager();
+    const fetchMock = createCacheFetchMock({
+      name: "cachedContents/system-cache-no-tools",
+      expireTime,
+    });
+    const { streamFn: innerStreamFn, getCapturedPayload } = createCapturingStreamFn();
+
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      now,
+      sessionManager,
+      streamFn: innerStreamFn,
+    });
+
+    await Promise.resolve(
+      wrapped?.(
+        makeGoogleModel(),
+        {
+          systemPrompt: "Follow policy.",
+          messages: [],
+          tools: makeFuzzGooglePromptCacheTools().slice(0, 3),
+        } as never,
+        { toolChoice: "any" } as never,
+      ),
+    );
+
+    const createBody = fetchJsonBody(fetchMock);
+    expect(createBody).not.toHaveProperty("tools");
+    expect(createBody).not.toHaveProperty("toolConfig");
+    expect(streamContext(innerStreamFn).tools).toBeUndefined();
+    expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-no-tools");
   });
 
   it("reuses a persisted cache entry without creating a second cache", async () => {

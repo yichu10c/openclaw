@@ -9,6 +9,7 @@ import type { StreamFn } from "../runtime/index.js";
 import { isSessionWriteLockTimeoutError } from "../session-write-lock-error.js";
 import { stableStringify } from "../stable-stringify.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
+import { projectRuntimeToolInputSchema } from "../tool-schema-projection.js";
 import { mergeTransportHeaders, sanitizeTransportPayloadText } from "../transport-stream-shared.js";
 import { log } from "./logger.js";
 import { isGooglePromptCacheEligible, resolveCacheRetention } from "./prompt-cache-retention.js";
@@ -33,6 +34,14 @@ type GooglePromptCacheModel = Model & {
 };
 type GooglePromptCacheContext = Parameters<StreamFn>[1];
 type GooglePromptCacheOptions = Parameters<StreamFn>[2];
+type GooglePromptCacheTool = NonNullable<GooglePromptCacheContext["tools"]>[number];
+type GooglePromptCacheToolField = "name" | "description" | "parameters";
+
+type ProjectedGooglePromptCacheTool = {
+  name: string;
+  description?: string;
+  parameters: Record<string, unknown>;
+};
 
 type GooglePromptCacheEntry = {
   timestamp: number;
@@ -189,7 +198,52 @@ function parseExpireTimeMs(expireTime: string | undefined): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["tools"]>) {
+function readGooglePromptCacheToolField(
+  tool: GooglePromptCacheTool,
+  field: GooglePromptCacheToolField,
+): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: tool[field] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function projectGooglePromptCacheTools(
+  tools: NonNullable<GooglePromptCacheContext["tools"]>,
+): ProjectedGooglePromptCacheTool[] {
+  return tools.flatMap((tool): ProjectedGooglePromptCacheTool[] => {
+    const nameRead = readGooglePromptCacheToolField(tool, "name");
+    if (!nameRead.ok || typeof nameRead.value !== "string" || nameRead.value.trim() === "") {
+      return [];
+    }
+    const parametersRead = readGooglePromptCacheToolField(tool, "parameters");
+    if (!parametersRead.ok) {
+      return [];
+    }
+    const parametersProjection = projectRuntimeToolInputSchema(
+      parametersRead.value,
+      `${nameRead.value}.parameters`,
+    );
+    if (parametersProjection.violations.length > 0) {
+      return [];
+    }
+    const descriptionRead = readGooglePromptCacheToolField(tool, "description");
+    const description =
+      descriptionRead.ok && typeof descriptionRead.value === "string"
+        ? descriptionRead.value
+        : undefined;
+    return [
+      {
+        name: nameRead.value,
+        ...(description !== undefined ? { description } : {}),
+        parameters: parametersProjection.schema as Record<string, unknown>,
+      },
+    ];
+  });
+}
+
+function convertManagedGoogleTools(tools: readonly ProjectedGooglePromptCacheTool[]) {
   if (tools.length === 0) {
     return undefined;
   }
@@ -197,7 +251,7 @@ function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["
     {
       functionDeclarations: tools.map((tool) => ({
         name: tool.name,
-        description: tool.description,
+        ...(tool.description !== undefined ? { description: tool.description } : {}),
         parametersJsonSchema: tool.parameters,
       })),
     },
@@ -206,6 +260,7 @@ function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["
 
 function mapManagedGoogleToolChoice(
   choice: unknown,
+  availableToolNames: ReadonlySet<string>,
 ): { mode: "AUTO" | "NONE" | "ANY"; allowedFunctionNames?: string[] } | undefined {
   if (!choice) {
     return undefined;
@@ -216,9 +271,12 @@ function mapManagedGoogleToolChoice(
     (choice as { type?: unknown }).type === "function"
   ) {
     const functionName = (choice as { function?: { name?: unknown } }).function?.name;
-    return typeof functionName === "string"
+    if (typeof functionName !== "string") {
+      return { mode: "ANY" };
+    }
+    return availableToolNames.has(functionName)
       ? { mode: "ANY", allowedFunctionNames: [functionName] }
-      : { mode: "ANY" };
+      : undefined;
   }
   switch (choice) {
     case "none":
@@ -235,9 +293,13 @@ function buildManagedGooglePromptCacheConfig(
   context: GooglePromptCacheContext,
   options: GooglePromptCacheOptions,
 ) {
-  const tools = context.tools?.length ? convertManagedGoogleTools(context.tools) : undefined;
+  const projectedTools = context.tools?.length ? projectGooglePromptCacheTools(context.tools) : [];
+  const tools = projectedTools.length ? convertManagedGoogleTools(projectedTools) : undefined;
   const toolChoice = tools
-    ? mapManagedGoogleToolChoice((options as { toolChoice?: unknown } | undefined)?.toolChoice)
+    ? mapManagedGoogleToolChoice(
+        (options as { toolChoice?: unknown } | undefined)?.toolChoice,
+        new Set(projectedTools.map((tool) => tool.name)),
+      )
     : undefined;
   const toolConfig = toolChoice ? { functionCallingConfig: toolChoice } : undefined;
   const cacheConfigDigest =
