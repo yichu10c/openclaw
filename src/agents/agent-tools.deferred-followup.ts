@@ -5,15 +5,17 @@ export function applyDeferredFollowupToolDescriptions(
   tools: AnyAgentTool[],
   params?: { agentId?: string },
 ): AnyAgentTool[] {
-  const hasCronTool = tools.some((tool) => tool.name === "cron");
-  return tools.map((tool) => {
-    if (tool.name === "exec") {
+  const toolNames = tools.map((tool) => safeToolName(tool));
+  const hasCronTool = toolNames.some((name) => name === "cron");
+  return tools.map((tool, index) => {
+    const name = toolNames[index];
+    if (name === "exec") {
       return {
         ...tool,
         description: describeExecTool({ agentId: params?.agentId, hasCronTool }),
       };
     }
-    if (tool.name === "process") {
+    if (name === "process") {
       return {
         ...tool,
         description: describeProcessTool({ hasCronTool }),
@@ -21,4 +23,12 @@ export function applyDeferredFollowupToolDescriptions(
     }
     return tool;
   });
+}
+
+function safeToolName(tool: AnyAgentTool): string | undefined {
+  try {
+    return tool.name;
+  } catch {
+    return undefined;
+  }
 }

@@ -41,4 +41,25 @@ describe("createOpenClawCodingTools deferred follow-up guidance", () => {
       "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill. Use poll/log when you need status, logs, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable. Use poll/log also for input-wait hints. Use write/send-keys/submit/paste/kill for input or intervention.",
     );
   });
+
+  it("ignores unreadable synthetic tool names while updating healthy tools", () => {
+    const unreadableTool: Record<string, unknown> = {};
+    Object.defineProperty(unreadableTool, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin deferred tool name read failed");
+      },
+    });
+
+    const tools = applyDeferredFollowupToolDescriptions([
+      unreadableTool,
+      { name: "exec", description: "exec base" },
+      { name: "process", description: "process base" },
+      { name: "cron", description: "cron base" },
+    ] as AnyAgentTool[]);
+
+    expect(tools[0]).toBe(unreadableTool);
+    expect(tools[1]?.description).toContain("use cron instead");
+    expect(tools[2]?.description).toContain("use cron for scheduled follow-ups");
+  });
 });
