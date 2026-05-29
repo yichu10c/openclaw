@@ -724,6 +724,72 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("skips unreadable tools/list metadata while preserving healthy siblings", () => {
+    const inputSchema = { type: "object", properties: {} };
+    const unreadableName = Object.defineProperties(
+      {},
+      {
+        name: {
+          get() {
+            throw new Error("mockplugin name getter failed");
+          },
+        },
+        description: { value: "bad name" },
+        inputSchema: { value: inputSchema },
+      },
+    );
+    const unreadableSchema = Object.defineProperties(
+      {},
+      {
+        name: { value: "mockplugin_schema" },
+        description: { value: "bad schema" },
+        inputSchema: {
+          get() {
+            throw new Error("mockplugin schema getter failed");
+          },
+        },
+      },
+    );
+    const healthyTool = Object.defineProperties(
+      {},
+      {
+        name: { value: "mockplugin_status" },
+        title: { value: "Status" },
+        description: {
+          get() {
+            throw new Error("mockplugin description getter failed");
+          },
+        },
+        inputSchema: { value: inputSchema },
+      },
+    );
+
+    const result = testing.readListedToolsForCatalog({
+      listedTools: [unreadableName, unreadableSchema, healthyTool] as never,
+      serverName: "fuzzplugin",
+      safeServerName: "fuzzplugin",
+      launchSummary: "node mockplugin-mcp.mjs",
+    });
+
+    expect(result.tools).toEqual([
+      {
+        serverName: "fuzzplugin",
+        safeServerName: "fuzzplugin",
+        toolName: "mockplugin_status",
+        title: "Status",
+        description: undefined,
+        inputSchema,
+        fallbackDescription:
+          'Provided by bundle MCP server "fuzzplugin" (node mockplugin-mcp.mjs).',
+      },
+    ]);
+    expect(result.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+      "tools[0].name is unreadable: Error: mockplugin name getter failed",
+      "tools[1].inputSchema is unreadable: Error: mockplugin schema getter failed",
+      "tools[2].description is unreadable: Error: mockplugin description getter failed",
+    ]);
+  });
+
   it("reuses repeated materialization and recreates after explicit disposal", async () => {
     const created: SessionMcpRuntime[] = [];
     const disposed: string[] = [];

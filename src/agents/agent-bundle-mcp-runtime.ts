@@ -212,6 +212,95 @@ async function listAllTools(client: Client, timeoutMs: number) {
   return tools;
 }
 
+function createMcpToolCatalogDiagnostic(params: {
+  serverName: string;
+  safeServerName: string;
+  launchSummary: string;
+  message: string;
+}): McpToolCatalogDiagnostic {
+  return {
+    serverName: params.serverName,
+    safeServerName: params.safeServerName,
+    launchSummary: params.launchSummary,
+    message: params.message,
+  };
+}
+
+function readListedToolProperty(
+  tool: ListedTool,
+  property: keyof ListedTool,
+  toolIndex: number,
+): { value?: unknown; message?: string } {
+  try {
+    return { value: tool[property] };
+  } catch (error) {
+    return {
+      message: `tools[${toolIndex}].${property} is unreadable: ${redactErrorUrls(error)}`,
+    };
+  }
+}
+
+function readListedToolsForCatalog(params: {
+  listedTools: readonly ListedTool[];
+  serverName: string;
+  safeServerName: string;
+  launchSummary: string;
+}): {
+  tools: McpCatalogTool[];
+  diagnostics: McpToolCatalogDiagnostic[];
+} {
+  const tools: McpCatalogTool[] = [];
+  const diagnostics: McpToolCatalogDiagnostic[] = [];
+  for (const [toolIndex, tool] of params.listedTools.entries()) {
+    const nameRead = readListedToolProperty(tool, "name", toolIndex);
+    const rawName = nameRead.value;
+    const toolName = typeof rawName === "string" ? rawName.trim() : "";
+    if (nameRead.message || !toolName) {
+      diagnostics.push(
+        createMcpToolCatalogDiagnostic({
+          ...params,
+          message: nameRead.message ?? `tools[${toolIndex}].name expected non-empty string`,
+        }),
+      );
+      continue;
+    }
+
+    const inputSchemaRead = readListedToolProperty(tool, "inputSchema", toolIndex);
+    const inputSchema = inputSchemaRead.value;
+    if (inputSchemaRead.message || !inputSchema || typeof inputSchema !== "object") {
+      diagnostics.push(
+        createMcpToolCatalogDiagnostic({
+          ...params,
+          message: inputSchemaRead.message ?? `tools[${toolIndex}].inputSchema expected object`,
+        }),
+      );
+      continue;
+    }
+
+    const titleRead = readListedToolProperty(tool, "title", toolIndex);
+    if (titleRead.message) {
+      diagnostics.push(createMcpToolCatalogDiagnostic({ ...params, message: titleRead.message }));
+    }
+    const descriptionRead = readListedToolProperty(tool, "description", toolIndex);
+    if (descriptionRead.message) {
+      diagnostics.push(
+        createMcpToolCatalogDiagnostic({ ...params, message: descriptionRead.message }),
+      );
+    }
+
+    tools.push({
+      serverName: params.serverName,
+      safeServerName: params.safeServerName,
+      toolName,
+      title: normalizeOptionalString(titleRead.value),
+      description: normalizeOptionalString(descriptionRead.value),
+      inputSchema: inputSchema as McpCatalogTool["inputSchema"],
+      fallbackDescription: `Provided by bundle MCP server "${params.serverName}" (${params.launchSummary}).`,
+    });
+  }
+  return { tools, diagnostics };
+}
+
 async function disposeSession(session: BundleMcpSession) {
   session.detachStderr?.();
   if (session.transportType === "streamable-http") {
@@ -372,26 +461,19 @@ export function createSessionMcpRuntime(params: {
             failIfDisposed();
             const listedTools = await listAllTools(client, BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS);
             failIfDisposed();
+            const catalogEntries = readListedToolsForCatalog({
+              listedTools,
+              serverName,
+              safeServerName,
+              launchSummary: resolved.description,
+            });
             servers[serverName] = {
               serverName,
               launchSummary: resolved.description,
-              toolCount: listedTools.length,
+              toolCount: catalogEntries.tools.length,
             };
-            for (const tool of listedTools) {
-              const toolName = tool.name.trim();
-              if (!toolName) {
-                continue;
-              }
-              tools.push({
-                serverName,
-                safeServerName,
-                toolName,
-                title: tool.title,
-                description: normalizeOptionalString(tool.description),
-                inputSchema: tool.inputSchema,
-                fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
-              });
-            }
+            tools.push(...catalogEntries.tools);
+            diagnostics.push(...catalogEntries.diagnostics);
           } catch (error) {
             const message = redactErrorUrls(error);
             if (!disposed) {
@@ -777,6 +859,7 @@ export async function disposeAllSessionMcpRuntimes(): Promise<void> {
 
 export const testing = {
   createSessionMcpRuntimeManager,
+  readListedToolsForCatalog,
   async resetSessionMcpRuntimeManager() {
     await disposeAllSessionMcpRuntimes();
   },
