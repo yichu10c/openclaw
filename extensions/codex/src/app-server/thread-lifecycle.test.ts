@@ -112,6 +112,48 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("message,");
   });
 
+  it("skips unreadable synthetic dynamic tool names in developer instructions", () => {
+    const unreadableNameTool: Record<string, unknown> = {
+      description: "Synthetic unreadable dynamic tool",
+      inputSchema: { type: "object" },
+      deferLoading: true,
+    };
+    defineThrowingProperty(unreadableNameTool, "name");
+    const unreadableDeferredFlagTool: Record<string, unknown> = {
+      name: "fuzz_move_deferred_flag",
+      description: "Synthetic unreadable deferred flag",
+      inputSchema: { type: "object" },
+    };
+    defineThrowingProperty(unreadableDeferredFlagTool, "deferLoading");
+
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+      dynamicTools: [
+        unreadableNameTool,
+        unreadableDeferredFlagTool,
+        {
+          name: "message",
+          description: "Send a message",
+          inputSchema: { type: "object" },
+        },
+        {
+          name: "music_generate",
+          description: "Create music",
+          inputSchema: { type: "object" },
+          namespace: "openclaw",
+          deferLoading: true,
+        },
+      ] as never,
+    });
+
+    expect(instructions).toContain(
+      "Deferred searchable OpenClaw dynamic tools available: music_generate.",
+    );
+    expect(instructions).toContain(
+      "OpenClaw will deliver it through the active source conversation",
+    );
+    expect(instructions).not.toContain("fuzz_move_deferred_flag");
+  });
+
   it("keeps developer instructions compact when no dynamic tools are deferred", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
       dynamicTools: [

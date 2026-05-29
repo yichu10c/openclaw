@@ -1211,9 +1211,9 @@ function buildDeferredDynamicToolManifest(
   const deferredToolNames = [
     ...new Set(
       (dynamicTools ?? [])
-        .filter((tool) => tool.deferLoading === true)
-        .map((tool) => tool.name.trim())
-        .filter(Boolean),
+        .filter((tool) => readDynamicToolField(tool, "deferLoading") === true)
+        .map((tool) => readDynamicToolName(tool))
+        .filter((name): name is string => Boolean(name)),
     ),
   ].toSorted((left, right) => left.localeCompare(right));
   if (deferredToolNames.length === 0) {
@@ -1227,7 +1227,7 @@ function buildVisibleReplyInstruction(
   dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
 ): string {
   const messageToolAvailable = dynamicTools
-    ? dynamicTools.some((tool) => tool.name.trim() === "message")
+    ? dynamicTools.some((tool) => readDynamicToolName(tool) === "message")
     : params.disableMessageTool !== true;
   if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
     return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. Do not repeat that visible content in your final answer.";
@@ -1236,6 +1236,19 @@ function buildVisibleReplyInstruction(
     return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` only for explicit out-of-band sends, media/file sends, or sends to a different target.";
   }
   return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
+}
+
+function readDynamicToolName(tool: CodexDynamicToolSpec): string | undefined {
+  const name = readDynamicToolField(tool, "name");
+  return typeof name === "string" ? name.trim() || undefined : undefined;
+}
+
+function readDynamicToolField(tool: object, key: string): unknown {
+  try {
+    return (tool as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
 }
 
 function buildUserInput(
