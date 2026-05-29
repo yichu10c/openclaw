@@ -220,6 +220,26 @@ type PluginOwnedProviderRegistration<T extends { id: string }> = {
   rootDir?: string;
 };
 
+function readStaticPluginToolName(tool: AnyAgentTool): string | undefined {
+  try {
+    const name = tool.name;
+    return typeof name === "string" && name.trim().length > 0 ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function withStaticPluginToolName(tool: AnyAgentTool, name: string): AnyAgentTool {
+  return new Proxy(tool, {
+    get(target, property, receiver) {
+      if (property === "name") {
+        return name;
+      }
+      return Reflect.get(target, property, receiver);
+    },
+  });
+}
+
 export type {
   PluginChannelRegistration,
   PluginChannelSetupRegistration,
@@ -592,14 +612,37 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
     const names = [...(opts?.names ?? []), ...(opts?.name ? [opts.name] : [])];
     const optional = opts?.optional === true;
-    const factory: OpenClawPluginToolFactory =
-      typeof tool === "function" ? tool : (_ctx: OpenClawPluginToolContext) => tool;
+    let overrideStaticToolName = false;
 
     if (typeof tool !== "function") {
-      names.push(tool.name);
+      const toolName = readStaticPluginToolName(tool);
+      if (toolName) {
+        names.push(toolName);
+      } else {
+        overrideStaticToolName = true;
+      }
     }
 
     const normalized = normalizePluginToolNames(names);
+    if (overrideStaticToolName && normalized.length === 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "plugin tool registration missing readable tool name",
+      });
+      return;
+    }
+    const factory: OpenClawPluginToolFactory =
+      typeof tool === "function"
+        ? tool
+        : (_ctx: OpenClawPluginToolContext) => {
+            const staticName = overrideStaticToolName ? normalized[0] : undefined;
+            if (staticName) {
+              return withStaticPluginToolName(tool, staticName);
+            }
+            return tool;
+          };
     const undeclared = findUndeclaredPluginToolNames({
       declaredNames,
       toolNames: normalized,

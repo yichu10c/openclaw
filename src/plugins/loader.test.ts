@@ -3701,6 +3701,102 @@ module.exports = { id: "throws-after-import", register() {} };`,
     ).toBe(true);
   });
 
+  it("diagnoses static plugin tools with unreadable registration names", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "fuzzplugin",
+      filename: "fuzzplugin.cjs",
+      body: `const fuzzTool = {
+        get name() {
+          throw new Error("fuzz name read failed");
+        },
+        description: "Fuzz tool",
+        parameters: {},
+        execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      };
+
+      module.exports = {
+        id: "fuzzplugin",
+        register(api) {
+          api.registerTool(fuzzTool);
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, { contracts: { tools: ["mockplugin_status"] } });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["fuzzplugin"],
+        },
+      },
+    });
+
+    expect(registry.tools).toStrictEqual([]);
+    expect(
+      registry.diagnostics.some(
+        (entry) =>
+          entry.pluginId === "fuzzplugin" &&
+          entry.message === "plugin tool registration missing readable tool name",
+      ),
+    ).toBe(true);
+  });
+
+  it("allows explicit names for static plugin tools with unreadable name getters", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "mockplugin",
+      filename: "mockplugin.cjs",
+      body: `const fuzzTool = {
+        get name() {
+          throw new Error("mock name read failed");
+        },
+        description: "Mock tool",
+        parameters: {},
+        execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      };
+
+      module.exports = {
+        id: "mockplugin",
+        register(api) {
+          api.registerTool(fuzzTool, { name: "mockplugin_status" });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, { contracts: { tools: ["mockplugin_status"] } });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["mockplugin"],
+        },
+      },
+    });
+
+    expect(registry.tools.flatMap((entry) => entry.names)).toEqual(["mockplugin_status"]);
+    const registered = registry.tools[0];
+    const runtimeTool = registered?.factory({});
+    if (!runtimeTool || Array.isArray(runtimeTool)) {
+      throw new Error("Expected registered static tool");
+    }
+    expect(runtimeTool.name).toBe("mockplugin_status");
+    expect(
+      registry.diagnostics.some(
+        (entry) =>
+          entry.pluginId === "mockplugin" &&
+          entry.message === "plugin tool registration missing readable tool name",
+      ),
+    ).toBe(false);
+  });
+
   it("caches non-activating snapshots without restoring global side effects", () => {
     useNoBundledPlugins();
     clearPluginCommands();
