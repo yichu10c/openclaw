@@ -1784,4 +1784,34 @@ describe("Codex app-server approval bridge", () => {
       reason: "OpenClaw codex app-server bridge does not grant native approvals yet.",
     });
   });
+
+  it("fails closed when command approval decisions are unreadable", () => {
+    const availableDecisions = Object.assign(["acceptForSession", "accept"], {
+      includes() {
+        throw new Error("fuzzplugin approval decision lookup failed");
+      },
+      find() {
+        throw new Error("mockplugin approval amendment lookup failed");
+      },
+    });
+
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions },
+        "approved-session",
+      ),
+    ).toEqual({
+      decision: "decline",
+    });
+    expect(
+      buildApprovalResponse(
+        "item/commandExecution/requestApproval",
+        { availableDecisions },
+        "approved-once",
+      ),
+    ).toEqual({
+      decision: "decline",
+    });
+  });
 });

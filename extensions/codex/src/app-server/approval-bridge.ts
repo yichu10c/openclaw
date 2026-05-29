@@ -1081,7 +1081,7 @@ function hasAvailableDecision(requestParams: JsonObject | undefined, decision: s
   try {
     return available.includes(decision);
   } catch {
-    return true;
+    return false;
   }
 }
 
