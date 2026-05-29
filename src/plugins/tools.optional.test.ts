@@ -179,6 +179,22 @@ function createToolWithUnreadableField(name: string, field: "execute" | "name" |
   return descriptor;
 }
 
+function createToolWithBoundedNameReads(name: string, readableReads: number) {
+  const descriptor = makeTool(name) as Record<string, unknown>;
+  let reads = 0;
+  Object.defineProperty(descriptor, "name", {
+    enumerable: true,
+    get() {
+      reads += 1;
+      if (reads > readableReads) {
+        throw new Error("fuzzplugin name was read too often");
+      }
+      return name;
+    },
+  });
+  return descriptor;
+}
+
 function installConsoleMethodSpy(method: "log" | "warn") {
   const spy = vi.fn();
   loggingState.rawConsole = {
@@ -1763,6 +1779,29 @@ describe("resolvePluginTools optional tools", () => {
       content: [{ type: "text", text: "mock-status-ok" }],
     });
     expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("caches plugin tools without re-reading the validated name", async () => {
+    const factory = vi.fn(() => createToolWithBoundedNameReads("mockplugin_status", 4));
+    setRegistry([
+      {
+        pluginId: "fuzzplugin",
+        optional: false,
+        source: "/tmp/fuzzplugin.js",
+        names: ["mockplugin_status"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(createResolveToolsParams());
+    const second = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(first, ["mockplugin_status"]);
+    expectResolvedToolNames(second, ["mockplugin_status"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "ok" }],
+    });
   });
 
   it("reuses cached plugin tool descriptors across session identity changes", async () => {

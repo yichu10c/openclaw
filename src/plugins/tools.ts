@@ -48,6 +48,10 @@ export {
 
 type PluginToolFactoryTimingResult = "array" | "error" | "null" | "single";
 
+type PluginToolInspection =
+  | { ok: true; tool: AnyAgentTool; name: string }
+  | { ok: false; reason: string };
+
 type PluginToolFactoryTiming = {
   pluginId: string;
   names: string[];
@@ -324,37 +328,41 @@ function shouldWarnPluginToolFactoryTimings(params: {
   );
 }
 
-function describeMalformedPluginTool(tool: unknown): string | undefined {
+function inspectPluginTool(tool: unknown): PluginToolInspection {
   if (!isRecord(tool)) {
-    return "tool must be an object";
+    return { ok: false, reason: "tool must be an object" };
   }
   const nameRead = readPluginToolField(tool, "name");
   if (!nameRead.readable) {
-    return "unreadable name";
+    return { ok: false, reason: "unreadable name" };
   }
-  const name = typeof nameRead.value === "string" ? nameRead.value.trim() : "";
-  if (!name) {
-    return "missing non-empty name";
+  const name = typeof nameRead.value === "string" ? nameRead.value : "";
+  const displayName = name.trim();
+  if (!displayName) {
+    return { ok: false, reason: "missing non-empty name" };
   }
   const executeRead = readPluginToolField(tool, "execute");
   if (!executeRead.readable) {
-    return `${name} unreadable execute function`;
+    return { ok: false, reason: `${displayName} unreadable execute function` };
   }
   if (typeof executeRead.value !== "function") {
-    return `${name} missing execute function`;
+    return { ok: false, reason: `${displayName} missing execute function` };
   }
   const parametersRead = readPluginToolField(tool, "parameters");
   if (!parametersRead.readable) {
-    return `${name} unreadable parameters object`;
+    return { ok: false, reason: `${displayName} unreadable parameters object` };
   }
   if (!isRecord(parametersRead.value)) {
-    return `${name} missing parameters object`;
+    return { ok: false, reason: `${displayName} missing parameters object` };
   }
   const parametersIssue = describeNonJsonCompatibleValue(parametersRead.value, "parameters");
   if (parametersIssue) {
-    return `${name} parameters must be JSON-compatible: ${parametersIssue}`;
+    return {
+      ok: false,
+      reason: `${displayName} parameters must be JSON-compatible: ${parametersIssue}`,
+    };
   }
-  return undefined;
+  return { ok: true, tool: tool as AnyAgentTool, name };
 }
 
 function pluginToolNamesMatchAllowlist(params: {
@@ -586,13 +594,12 @@ function createCachedDescriptorPluginTool(params: {
         const resolved = candidate.factory(params.ctx);
         const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
         for (const toolRaw of listRaw) {
-          const malformedReason = describeMalformedPluginTool(toolRaw);
-          if (malformedReason) {
+          const inspection = inspectPluginTool(toolRaw);
+          if (!inspection.ok) {
             continue;
           }
-          const runtimeTool = toolRaw as AnyAgentTool;
-          if (normalizeToolName(readPluginToolName(runtimeTool)) === requestedToolName) {
-            return runtimeTool;
+          if (normalizeToolName(inspection.name) === requestedToolName) {
+            return inspection.tool;
           }
         }
         return undefined;
@@ -1167,9 +1174,9 @@ export function resolvePluginTools(params: {
     for (const toolRaw of list) {
       // Plugin factories run at request time and can return arbitrary values; isolate
       // malformed tools here so one bad plugin tool cannot poison every provider.
-      const malformedReason = describeMalformedPluginTool(toolRaw);
-      if (malformedReason) {
-        const message = `plugin tool is malformed (${entry.pluginId}): ${malformedReason}`;
+      const inspection = inspectPluginTool(toolRaw);
+      if (!inspection.ok) {
+        const message = `plugin tool is malformed (${entry.pluginId}): ${inspection.reason}`;
         context.logger.error(message);
         registry.diagnostics.push({
           level: "error",
@@ -1179,11 +1186,11 @@ export function resolvePluginTools(params: {
         });
         continue;
       }
-      const tool = toolRaw as AnyAgentTool;
+      const { tool, name: toolName } = inspection;
       const undeclared = entry.declaredNames
         ? findUndeclaredPluginToolNames({
             declaredNames: entry.declaredNames,
-            toolNames: [tool.name],
+            toolNames: [toolName],
           })
         : [];
       if (undeclared.length > 0) {
@@ -1197,9 +1204,9 @@ export function resolvePluginTools(params: {
         });
         continue;
       }
-      const normalizedToolName = normalizeToolName(tool.name);
+      const normalizedToolName = normalizeToolName(toolName);
       if (normalizedNameSet.has(normalizedToolName) || existingNormalized.has(normalizedToolName)) {
-        const message = `plugin tool name conflict (${entry.pluginId}): ${tool.name}`;
+        const message = `plugin tool name conflict (${entry.pluginId}): ${toolName}`;
         if (!params.suppressNameConflicts) {
           context.logger.error(message);
           registry.diagnostics.push({
@@ -1212,19 +1219,19 @@ export function resolvePluginTools(params: {
         continue;
       }
       normalizedNameSet.add(normalizedToolName);
-      existing.add(tool.name);
+      existing.add(toolName);
       existingNormalized.add(normalizedToolName);
       const optional = isPluginToolOptional({
         entry,
         manifestPlugin,
-        toolName: tool.name,
+        toolName,
       });
       setPluginToolMeta(tool, {
         pluginId: entry.pluginId,
         optional,
         trustedLocalMedia: isTrustedManifestLocalMediaTool({
           manifestPlugin,
-          toolName: tool.name,
+          toolName,
         }),
       });
       if (manifestPlugin) {
@@ -1232,6 +1239,7 @@ export function resolvePluginTools(params: {
         const capturedDescriptor = capturePluginToolDescriptor({
           pluginId: entry.pluginId,
           tool,
+          name: toolName,
           optional,
         });
         if (capturedDescriptor) {

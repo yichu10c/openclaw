@@ -208,10 +208,17 @@ function readToolDescriptorProperty(
 export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
+  name?: string;
   optional: boolean;
 }): CachedPluginToolDescriptor | undefined {
-  const name = readToolDescriptorProperty(params.tool, "name");
-  if (!name.readable || typeof name.value !== "string" || !name.value.trim()) {
+  const nameValue =
+    params.name !== undefined
+      ? params.name
+      : (() => {
+          const name = readToolDescriptorProperty(params.tool, "name");
+          return name.readable && typeof name.value === "string" ? name.value : "";
+        })();
+  if (!nameValue.trim()) {
     return undefined;
   }
   const description = readToolDescriptorProperty(params.tool, "description");
@@ -222,7 +229,7 @@ export function capturePluginToolDescriptor(params: {
   if (!parameters.readable) {
     return undefined;
   }
-  const inputSchema = projectRuntimeToolInputSchema(parameters.value, `${name.value}.parameters`);
+  const inputSchema = projectRuntimeToolInputSchema(parameters.value, `${nameValue}.parameters`);
   if (inputSchema.violations.length > 0) {
     return undefined;
   }
@@ -240,12 +247,12 @@ export function capturePluginToolDescriptor(params: {
       : {}),
     optional: params.optional,
     descriptor: {
-      name: name.value,
+      name: nameValue,
       ...(title ? { title } : {}),
       description: description.value,
       inputSchema: inputSchema.schema as JsonObject,
       owner: { kind: "plugin", pluginId: params.pluginId },
-      executor: { kind: "plugin", pluginId: params.pluginId, toolName: name.value },
+      executor: { kind: "plugin", pluginId: params.pluginId, toolName: nameValue },
     },
   };
 }
