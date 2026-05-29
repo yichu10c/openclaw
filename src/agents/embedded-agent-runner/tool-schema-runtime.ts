@@ -49,15 +49,24 @@ export function normalizeProviderToolSchemas<
   TResult = unknown,
 >(params: ProviderToolSchemaParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
   const provider = params.provider.trim();
-  const pluginNormalized = normalizeProviderToolSchemasWithPlugin({
-    provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    runtimeHandle: params.runtimeHandle,
-    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
-    context: buildProviderToolSchemaContext(params, provider),
-  });
+  let pluginNormalized: unknown;
+  try {
+    pluginNormalized = normalizeProviderToolSchemasWithPlugin({
+      provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      runtimeHandle: params.runtimeHandle,
+      allowRuntimePluginLoad: params.allowRuntimePluginLoad,
+      context: buildProviderToolSchemaContext(params, provider),
+    });
+  } catch (error) {
+    log.warn(`provider tool schema normalization failed for ${provider}: ${formatError(error)}`, {
+      provider,
+      toolCount: safeArrayLength(params.tools),
+    });
+    return params.tools;
+  }
   return Array.isArray(pluginNormalized)
     ? (pluginNormalized as AgentTool<TSchemaType, TResult>[])
     : params.tools;
@@ -68,31 +77,41 @@ export function normalizeProviderToolSchemas<
  */
 export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParams): void {
   const provider = params.provider.trim();
-  const diagnostics = inspectProviderToolSchemasWithPlugin({
-    provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    runtimeHandle: params.runtimeHandle,
-    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
-    context: buildProviderToolSchemaContext(params, provider),
-  });
+  let diagnostics: unknown;
+  try {
+    diagnostics = inspectProviderToolSchemasWithPlugin({
+      provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      runtimeHandle: params.runtimeHandle,
+      allowRuntimePluginLoad: params.allowRuntimePluginLoad,
+      context: buildProviderToolSchemaContext(params, provider),
+    });
+  } catch (error) {
+    log.warn(`provider tool schema diagnostics failed for ${provider}: ${formatError(error)}`, {
+      provider,
+      toolCount: safeArrayLength(params.tools),
+    });
+    return;
+  }
   if (!Array.isArray(diagnostics)) {
     return;
   }
-  if (diagnostics.length === 0) {
+  const normalizedDiagnostics = normalizeProviderToolSchemaDiagnostics(diagnostics);
+  if (normalizedDiagnostics.length === 0) {
     return;
   }
 
-  const summary = summarizeProviderToolSchemaDiagnostics(diagnostics);
+  const summary = summarizeProviderToolSchemaDiagnostics(normalizedDiagnostics);
   log.warn(
-    `provider tool schema diagnostics: ${diagnostics.length} ${diagnostics.length === 1 ? "tool" : "tools"} for ${params.provider}: ${summary}`,
+    `provider tool schema diagnostics: ${normalizedDiagnostics.length} ${normalizedDiagnostics.length === 1 ? "tool" : "tools"} for ${params.provider}: ${summary}`,
     {
       provider: params.provider,
-      toolCount: params.tools.length,
-      diagnosticCount: diagnostics.length,
-      tools: params.tools.map((tool, index) => `${index}:${tool.name}`),
-      diagnostics: diagnostics.map((diagnostic) => ({
+      toolCount: safeArrayLength(params.tools),
+      diagnosticCount: normalizedDiagnostics.length,
+      tools: copyToolNames(params.tools),
+      diagnostics: normalizedDiagnostics.map((diagnostic) => ({
         index: diagnostic.toolIndex,
         tool: diagnostic.toolName,
         violations: diagnostic.violations.slice(0, 12),
@@ -100,6 +119,120 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
       })),
     },
   );
+}
+
+function formatError(error: unknown): string {
+  try {
+    if (error instanceof Error) {
+      const message = error.message;
+      if (typeof message === "string" && message) {
+        return message;
+      }
+      const name = error.name;
+      return typeof name === "string" && name ? name : "unknown error";
+    }
+    const message = String(error);
+    return message || "unknown error";
+  } catch {
+    return "unknown error";
+  }
+}
+
+function safeArrayLength(values: readonly unknown[]): number {
+  try {
+    return values.length;
+  } catch {
+    return 0;
+  }
+}
+
+function copyArrayEntries<T>(values: readonly T[]): T[] | undefined {
+  try {
+    const entries: T[] = [];
+    const length = values.length;
+    for (let index = 0; index < length; index += 1) {
+      entries.push(values[index]);
+    }
+    return entries;
+  } catch {
+    return undefined;
+  }
+}
+
+function copyToolNames(tools: readonly AgentTool[]): string[] {
+  const entries = copyArrayEntries(tools);
+  if (!entries) {
+    return [];
+  }
+  const names: string[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    let name = "unknown";
+    try {
+      const value = entries[index]?.name;
+      if (typeof value === "string" && value.trim()) {
+        name = value;
+      }
+    } catch {
+      name = "unreadable";
+    }
+    names.push(`${index}:${name}`);
+  }
+  return names;
+}
+
+function normalizeProviderToolSchemaDiagnostics(
+  diagnostics: readonly ProviderToolSchemaDiagnostic[],
+): ProviderToolSchemaDiagnostic[] {
+  const entries = copyArrayEntries(diagnostics);
+  if (!entries) {
+    return [];
+  }
+  const normalized: ProviderToolSchemaDiagnostic[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    const diagnostic = normalizeProviderToolSchemaDiagnostic(entries[index], index);
+    if (diagnostic) {
+      normalized.push(diagnostic);
+    }
+  }
+  return normalized;
+}
+
+function normalizeProviderToolSchemaDiagnostic(
+  diagnostic: unknown,
+  diagnosticIndex: number,
+): ProviderToolSchemaDiagnostic | undefined {
+  if (!diagnostic || typeof diagnostic !== "object") {
+    return undefined;
+  }
+  const record = diagnostic as ProviderToolSchemaDiagnostic;
+  let toolIndex: number | undefined;
+  try {
+    toolIndex = typeof record.toolIndex === "number" ? record.toolIndex : undefined;
+  } catch {
+    toolIndex = undefined;
+  }
+  let toolName = `tool[${toolIndex ?? diagnosticIndex}]`;
+  try {
+    if (typeof record.toolName === "string" && record.toolName.trim()) {
+      toolName = record.toolName;
+    }
+  } catch {
+    // Keep the stable fallback name.
+  }
+  let violations: string[];
+  try {
+    const value = record.violations;
+    violations = Array.isArray(value)
+      ? (copyArrayEntries(value)?.filter((entry): entry is string => typeof entry === "string") ??
+        [])
+      : [];
+  } catch {
+    violations = [];
+  }
+  if (violations.length === 0) {
+    violations = [`${toolName}.diagnostic`];
+  }
+  return { toolName, toolIndex, violations };
 }
 
 function summarizeProviderToolSchemaDiagnostics(

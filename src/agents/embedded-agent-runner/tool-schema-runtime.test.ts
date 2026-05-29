@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   inspectProviderToolSchemasWithPlugin: vi.fn(),
@@ -18,11 +18,17 @@ vi.mock("./logger.js", () => ({
   log: mocks.log,
 }));
 
-const { logProviderToolSchemaDiagnostics, normalizeProviderToolSchemas } = await import(
-  "./tool-schema-runtime.js"
-);
+const { logProviderToolSchemaDiagnostics, normalizeProviderToolSchemas } =
+  await import("./tool-schema-runtime.js");
 
 describe("tool schema runtime diagnostics", () => {
+  beforeEach(() => {
+    mocks.inspectProviderToolSchemasWithPlugin.mockReset();
+    mocks.normalizeProviderToolSchemasWithPlugin.mockReset();
+    mocks.log.info.mockReset();
+    mocks.log.warn.mockReset();
+  });
+
   it("stays quiet when a provider reports no diagnostics", () => {
     mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([]);
 
@@ -79,6 +85,115 @@ describe("tool schema runtime diagnostics", () => {
           { index: 0, tool: "alpha", violations: ["one", "two"], violationCount: 2 },
           { index: 1, tool: "beta", violations: ["one"], violationCount: 1 },
         ],
+      },
+    );
+  });
+
+  it("keeps original tools when provider schema normalization throws", () => {
+    const tools = [{ name: "fuzz_move_delta" }] as never;
+    mocks.normalizeProviderToolSchemasWithPlugin.mockImplementationOnce(() => {
+      throw new Error("fuzzplugin normalize failed");
+    });
+
+    expect(
+      normalizeProviderToolSchemas({
+        provider: "example",
+        tools,
+      }),
+    ).toBe(tools);
+
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema normalization failed for example: fuzzplugin normalize failed",
+      {
+        provider: "example",
+        toolCount: 1,
+      },
+    );
+  });
+
+  it("keeps original tools when provider schema normalization throws an unreadable value", () => {
+    const tools = [{ name: "fuzz_move_delta" }] as never;
+    mocks.normalizeProviderToolSchemasWithPlugin.mockImplementationOnce(() => {
+      throw {
+        toString() {
+          throw new Error("fuzzplugin thrown value stringifier failed");
+        },
+      };
+    });
+
+    expect(
+      normalizeProviderToolSchemas({
+        provider: "example",
+        tools,
+      }),
+    ).toBe(tools);
+
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema normalization failed for example: unknown error",
+      {
+        provider: "example",
+        toolCount: 1,
+      },
+    );
+  });
+
+  it("keeps diagnostics logging bounded for unreadable synthetic tool metadata", () => {
+    const tool = {};
+    Object.defineProperty(tool, "name", {
+      get() {
+        throw new Error("fuzzplugin tool name getter failed");
+      },
+    });
+    const diagnostic = {
+      toolIndex: 0,
+      toolName: "fuzz_move_delta",
+    };
+    Object.defineProperty(diagnostic, "violations", {
+      get() {
+        throw new Error("fuzzplugin diagnostic violations getter failed");
+      },
+    });
+    mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([diagnostic]);
+
+    logProviderToolSchemaDiagnostics({
+      provider: "example",
+      tools: [tool] as never,
+    });
+
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema diagnostics: 1 tool for example: fuzz_move_delta (1 violation)",
+      {
+        provider: "example",
+        toolCount: 1,
+        diagnosticCount: 1,
+        tools: ["0:unreadable"],
+        diagnostics: [
+          {
+            index: 0,
+            tool: "fuzz_move_delta",
+            violations: ["fuzz_move_delta.diagnostic"],
+            violationCount: 1,
+          },
+        ],
+      },
+    );
+  });
+
+  it("keeps diagnostics logging quiet when provider inspection throws", () => {
+    mocks.inspectProviderToolSchemasWithPlugin.mockImplementationOnce(() => {
+      throw new Error("fuzzplugin inspect failed");
+    });
+
+    logProviderToolSchemaDiagnostics({
+      provider: "example",
+      tools: [{ name: "fuzz_move_delta" }] as never,
+    });
+
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema diagnostics failed for example: fuzzplugin inspect failed",
+      {
+        provider: "example",
+        toolCount: 1,
       },
     );
   });
