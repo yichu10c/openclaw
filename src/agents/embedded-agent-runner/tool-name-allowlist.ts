@@ -17,16 +17,24 @@ function addName(names: Set<string>, value: unknown): void {
   }
 }
 
+function addReadableName(names: Set<string>, readValue: () => unknown): void {
+  try {
+    addName(names, readValue());
+  } catch {
+    // Malformed synthetic descriptors should not poison sibling allowlist entries.
+  }
+}
+
 export function collectAllowedToolNames(params: {
   tools: AgentTool[];
   clientTools?: ClientToolDefinition[];
 }): Set<string> {
   const names = new Set<string>();
   for (const tool of params.tools) {
-    addName(names, tool.name);
+    addReadableName(names, () => tool.name);
   }
   for (const tool of params.clientTools ?? []) {
-    addName(names, tool.function?.name);
+    addReadableName(names, () => tool.function?.name);
   }
   return names;
 }
@@ -37,7 +45,7 @@ export function collectAllowedToolNames(params: {
 export function collectRegisteredToolNames(tools: Array<{ name?: string }>): Set<string> {
   const names = new Set<string>();
   for (const tool of tools) {
-    addName(names, tool.name);
+    addReadableName(names, () => tool.name);
   }
   return names;
 }
@@ -48,10 +56,16 @@ export function collectCoreBuiltinToolNames(
 ): Set<string> {
   const names = new Set<string>();
   for (const tool of tools) {
-    if (options?.isPluginTool?.(tool)) {
+    let isPluginTool = false;
+    try {
+      isPluginTool = options?.isPluginTool?.(tool) ?? false;
+    } catch {
       continue;
     }
-    addName(names, tool.name);
+    if (isPluginTool) {
+      continue;
+    }
+    addReadableName(names, () => tool.name);
   }
   return names;
 }

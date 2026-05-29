@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { findClientToolNameConflicts } from "../agent-tool-definition-adapter.js";
+import type { AgentTool } from "../runtime/index.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import {
   addClientToolsToToolSearchCatalog,
@@ -32,6 +33,53 @@ describe("tool name allowlists", () => {
     });
 
     expect([...names]).toEqual(["read", "memory_search", "image_generate"]);
+  });
+
+  it("omits unreadable synthetic tool names while preserving healthy names", () => {
+    const unreadableTool: Record<string, unknown> = {};
+    Object.defineProperty(unreadableTool, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin allowlist tool name read failed");
+      },
+    });
+    const unreadableClientFunction: Record<string, unknown> = {};
+    const unreadableClientTool = {
+      type: "function",
+      function: unreadableClientFunction,
+    } as unknown as ClientToolDefinition;
+    Object.defineProperty(unreadableClientFunction, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin allowlist client tool name read failed");
+      },
+    });
+
+    expect([
+      ...collectRegisteredToolNames([unreadableTool as { name?: string }, { name: "read" }]),
+    ]).toEqual(["read"]);
+    expect([
+      ...collectAllowedToolNames({
+        tools: [unreadableTool as unknown as AgentTool, createStubTool("exec")],
+        clientTools: [
+          unreadableClientTool,
+          {
+            type: "function",
+            function: {
+              name: "mockplugin_client",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+      }),
+    ]).toEqual(["exec", "mockplugin_client"]);
+    expect([
+      ...collectCoreBuiltinToolNames([unreadableTool as { name?: string }, { name: "read" }], {
+        isPluginTool(tool) {
+          return tool.name === "mockplugin_tool";
+        },
+      }),
+    ]).toEqual(["read"]);
   });
 
   it("builds a stable agent session allowlist from custom tool names", () => {
