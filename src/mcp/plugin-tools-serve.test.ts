@@ -174,6 +174,59 @@ describe("plugin tools MCP server", () => {
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 
+  it("omits unreadable synthetic plugin tools while preserving healthy MCP tools", async () => {
+    const unreadableTool: Record<string, unknown> = {};
+    Object.defineProperties(unreadableTool, {
+      name: {
+        enumerable: true,
+        get() {
+          throw new Error("fuzzplugin MCP tool name read failed");
+        },
+      },
+      parameters: {
+        enumerable: true,
+        get() {
+          throw new Error("fuzzplugin MCP tool parameters read failed");
+        },
+      },
+    });
+    const execute = vi.fn().mockResolvedValue({
+      content: "Stored.",
+    });
+    const healthyTool = {
+      name: "mockplugin_store",
+      description: "Store mockplugin memory",
+      parameters: {
+        type: "object",
+        properties: {
+          text: { type: "string" },
+        },
+      },
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([
+      unreadableTool as unknown as AnyAgentTool,
+      healthyTool,
+    ]);
+
+    await expect(handlers.listTools()).resolves.toMatchObject({
+      tools: [
+        {
+          name: "mockplugin_store",
+          description: "Store mockplugin memory",
+        },
+      ],
+    });
+    const result = await handlers.callTool({
+      name: "mockplugin_store",
+      arguments: { text: "remember this" },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("serializes plugin tool results that do not use the MCP content envelope", async () => {
     const execute = vi.fn().mockResolvedValue({
       provider: "kitchen-sink-search",

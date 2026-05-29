@@ -5,6 +5,7 @@ import {
 } from "../agents/agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { copyPluginToolMeta } from "../plugins/tool-metadata.js";
 import { coerceChatContentText } from "../shared/chat-content.js";
 
 type CallPluginToolParams = {
@@ -12,34 +13,96 @@ type CallPluginToolParams = {
   arguments?: unknown;
 };
 
-function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
-  const params = tool.parameters;
+type PluginToolsMcpEntry = {
+  tool: AnyAgentTool;
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+};
+
+function readPluginToolField(
+  tool: AnyAgentTool,
+  field: "description" | "execute" | "name" | "parameters",
+): { readable: true; value: unknown } | { readable: false } {
+  try {
+    return { readable: true, value: tool[field] };
+  } catch {
+    return { readable: false };
+  }
+}
+
+function resolveJsonSchemaForToolParameters(params: unknown): Record<string, unknown> {
   if (params && typeof params === "object" && "type" in params) {
     return params as Record<string, unknown>;
   }
   return { type: "object", properties: {} };
 }
 
+function preparePluginToolsMcpEntry(tool: AnyAgentTool): PluginToolsMcpEntry | undefined {
+  const rawName = readPluginToolField(tool, "name");
+  if (!rawName.readable || typeof rawName.value !== "string") {
+    return undefined;
+  }
+  const name = rawName.value.trim();
+  if (!name) {
+    return undefined;
+  }
+
+  const rawExecute = readPluginToolField(tool, "execute");
+  if (!rawExecute.readable || typeof rawExecute.value !== "function") {
+    return undefined;
+  }
+
+  const rawParameters = readPluginToolField(tool, "parameters");
+  if (!rawParameters.readable) {
+    return undefined;
+  }
+
+  const rawDescription = readPluginToolField(tool, "description");
+  const description =
+    rawDescription.readable && typeof rawDescription.value === "string" ? rawDescription.value : "";
+
+  try {
+    const safeTool = {
+      name,
+      description,
+      parameters: rawParameters.value,
+      execute: rawExecute.value,
+    } as AnyAgentTool;
+    copyPluginToolMeta(tool, safeTool);
+    const wrappedTool = isToolWrappedWithBeforeToolCallHook(tool)
+      ? rewrapToolWithBeforeToolCallHook(tool, undefined, { approvalMode: "report" })
+      : wrapToolWithBeforeToolCallHook(safeTool, undefined, { approvalMode: "report" });
+    return {
+      tool: wrappedTool,
+      name,
+      description,
+      inputSchema: resolveJsonSchemaForToolParameters(rawParameters.value),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
-  const wrappedTools = tools.map((tool) => {
-    if (isToolWrappedWithBeforeToolCallHook(tool)) {
-      return rewrapToolWithBeforeToolCallHook(tool, undefined, { approvalMode: "report" });
+  const entries: PluginToolsMcpEntry[] = [];
+  for (const tool of tools) {
+    const entry = preparePluginToolsMcpEntry(tool);
+    if (entry) {
+      entries.push(entry);
     }
-    // The ACPX MCP bridge should enforce the same pre-execution hook boundary
-    // as the agent and HTTP tool execution paths.
-    return wrapToolWithBeforeToolCallHook(tool, undefined, { approvalMode: "report" });
-  });
+  }
   const toolMap = new Map<string, AnyAgentTool>();
-  for (const tool of wrappedTools) {
-    toolMap.set(tool.name, tool);
+  for (const entry of entries) {
+    toolMap.set(entry.name, entry.tool);
   }
 
   return {
     listTools: async () => ({
-      tools: wrappedTools.map((tool) => ({
-        name: tool.name,
-        description: tool.description ?? "",
-        inputSchema: resolveJsonSchemaForTool(tool),
+      tools: entries.map((entry) => ({
+        name: entry.name,
+        description: entry.description,
+        inputSchema: entry.inputSchema,
       })),
     }),
     callTool: async (params: CallPluginToolParams, signal?: AbortSignal) => {
