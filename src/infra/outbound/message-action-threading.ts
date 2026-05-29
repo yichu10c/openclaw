@@ -1,4 +1,4 @@
-import { readStringParam } from "../../agents/tools/common.js";
+import { readStringParam, ToolInputError } from "../../agents/tools/common.js";
 import type {
   ChannelId,
   ChannelThreadingAdapter,
@@ -13,8 +13,39 @@ import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 type ResolveAutoThreadId = NonNullable<ChannelThreadingAdapter["resolveAutoThreadId"]>;
 
+const THREADING_CONTROL_PARAM_KEYS = {
+  threadId: ["threadId", "thread_id"],
+  topLevel: ["topLevel", "top_level"],
+} as const;
+
+function readThreadingControlParam(
+  actionParams: Record<string, unknown>,
+  key: keyof typeof THREADING_CONTROL_PARAM_KEYS,
+): unknown {
+  for (const candidate of THREADING_CONTROL_PARAM_KEYS[key]) {
+    let hasKey = false;
+    try {
+      hasKey = Object.hasOwn(actionParams, candidate);
+    } catch {
+      throw new ToolInputError("message action params could not be read");
+    }
+    if (!hasKey) {
+      continue;
+    }
+    try {
+      return actionParams[candidate];
+    } catch {
+      throw new ToolInputError(`${candidate} could not be read`);
+    }
+  }
+  return undefined;
+}
+
 function suppressesImplicitThreading(actionParams: Record<string, unknown>): boolean {
-  return actionParams.topLevel === true || actionParams.threadId === null;
+  return (
+    readThreadingControlParam(actionParams, "topLevel") === true ||
+    readThreadingControlParam(actionParams, "threadId") === null
+  );
 }
 
 export function resolveAndApplyOutboundThreadId(

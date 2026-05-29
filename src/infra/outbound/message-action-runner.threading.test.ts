@@ -176,6 +176,32 @@ describe("message action threading helpers", () => {
     expect(resolveAutoThreadId).not.toHaveBeenCalled();
   });
 
+  it.each(["threadId", "thread_id", "topLevel", "top_level"] as const)(
+    "fails closed when synthetic threading control param %s is unreadable",
+    (field) => {
+      const actionParams: Record<string, unknown> = {
+        channel: "forum",
+        target: "forum:123",
+        message: "hi from fuzzplugin",
+      };
+      Object.defineProperty(actionParams, field, {
+        enumerable: true,
+        get() {
+          throw new Error(`fuzzplugin ${field} getter failed`);
+        },
+      });
+
+      expect(() =>
+        resolveAndApplyOutboundThreadId(actionParams, {
+          cfg: forumConfig,
+          to: "forum:123",
+          toolContext: defaultForumToolContext,
+          resolveAutoThreadId: () => "42",
+        }),
+      ).toThrow(`${field} could not be read`);
+    },
+  );
+
   it("passes explicit replyTo into auto-thread resolution", () => {
     const resolveAutoThreadId = vi.fn((_params: { replyToId?: string | null }) => "thread-777");
     const actionParams: Record<string, unknown> = {
@@ -237,6 +263,31 @@ describe("message action threading helpers", () => {
 
     expect(resolved).toBeUndefined();
     expect(actionParams.replyTo).toBeUndefined();
+  });
+
+  it("fails closed when synthetic top-level reply control is unreadable", () => {
+    const actionParams: Record<string, unknown> = {
+      channel: "workspace",
+      target: "channel:C123",
+      message: "hi from fuzzplugin",
+    };
+    Object.defineProperty(actionParams, "topLevel", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin top-level getter failed");
+      },
+    });
+
+    expect(() =>
+      resolveAndApplyOutboundReplyToId(actionParams, {
+        channel: "workspace",
+        toolContext: {
+          currentChannelId: "channel:C123",
+          currentMessageId: "msg-42",
+          replyToMode: "all",
+        },
+      }),
+    ).toThrow("topLevel could not be read");
   });
 
   it("skips inherited reply threading for batched mode", () => {
