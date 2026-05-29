@@ -155,4 +155,47 @@ describe("runtime tool input schema projection", () => {
       ],
     });
   });
+
+  it("filters tools with unreadable descriptors without dropping healthy tools", () => {
+    const unreadableName: Record<string, unknown> = {
+      parameters: { type: "object", properties: {} },
+    };
+    Object.defineProperty(unreadableName, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin name is unreadable");
+      },
+    });
+    const unreadableParameters: Record<string, unknown> = {
+      name: "fuzz_move_delta",
+    };
+    Object.defineProperty(unreadableParameters, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin parameters are unreadable");
+      },
+    });
+    const healthy = {
+      name: "healthy",
+      parameters: { type: "object", properties: {} },
+    };
+
+    expect(
+      filterRuntimeCompatibleTools([unreadableName, unreadableParameters, healthy] as never),
+    ).toEqual({
+      tools: [healthy],
+      diagnostics: [
+        {
+          toolName: "tool[0]",
+          toolIndex: 0,
+          violations: ["tool[0].name is unreadable"],
+        },
+        {
+          toolName: "fuzz_move_delta",
+          toolIndex: 1,
+          violations: ["fuzz_move_delta.parameters is unreadable"],
+        },
+      ],
+    });
+  });
 });

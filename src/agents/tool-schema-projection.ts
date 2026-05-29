@@ -24,6 +24,21 @@ export type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" 
   readonly diagnostics: readonly RuntimeToolSchemaDiagnostic[];
 };
 
+function readToolProjectionField<TField extends "name" | "parameters">(
+  tool: Pick<AnyAgentTool, "name" | "parameters">,
+  field: TField,
+):
+  | { readable: true; value: Pick<AnyAgentTool, "name" | "parameters">[TField] }
+  | {
+      readable: false;
+    } {
+  try {
+    return { readable: true, value: tool[field] };
+  } catch {
+    return { readable: false };
+  }
+}
+
 function isJsonValue(value: unknown): value is RuntimeToolInputSchemaJson {
   if (value === null) {
     return true;
@@ -232,12 +247,31 @@ export function inspectRuntimeToolInputSchemas(
   tools: readonly Pick<AnyAgentTool, "name" | "parameters">[],
 ): RuntimeToolSchemaDiagnostic[] {
   return tools.flatMap((tool, toolIndex) => {
-    const toolName = tool.name || `tool[${toolIndex}]`;
-    const projection = projectRuntimeToolInputSchema(tool.parameters, `${toolName}.parameters`);
-    if (projection.violations.length === 0) {
+    const nameRead = readToolProjectionField(tool, "name");
+    const toolName =
+      nameRead.readable && typeof nameRead.value === "string" && nameRead.value
+        ? nameRead.value
+        : `tool[${toolIndex}]`;
+    const descriptorViolations = nameRead.readable ? [] : [`${toolName}.name is unreadable`];
+    const parametersRead = readToolProjectionField(tool, "parameters");
+    if (!parametersRead.readable) {
+      return [
+        {
+          toolName,
+          toolIndex,
+          violations: [...descriptorViolations, `${toolName}.parameters is unreadable`],
+        },
+      ];
+    }
+    const projection = projectRuntimeToolInputSchema(
+      parametersRead.value,
+      `${toolName}.parameters`,
+    );
+    const violations = [...descriptorViolations, ...projection.violations];
+    if (violations.length === 0) {
       return [];
     }
-    return [{ toolName, toolIndex, violations: projection.violations }];
+    return [{ toolName, toolIndex, violations }];
   });
 }
 
