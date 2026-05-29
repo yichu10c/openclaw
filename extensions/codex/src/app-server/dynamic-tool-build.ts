@@ -17,6 +17,7 @@ import {
   filterCodexDynamicTools,
   isForcedPrivateQaCodexRuntime,
   normalizeCodexDynamicToolName,
+  readCodexDynamicToolName,
 } from "./dynamic-tool-profile.js";
 import { resolveCodexNativeExecutionPolicy } from "./native-execution-policy.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
@@ -444,9 +445,12 @@ function isCodexMemoryFlushRun(
 }
 
 function filterCodexMemoryFlushDynamicTools<T extends { name: string }>(tools: T[]): T[] {
-  return tools.filter((tool) =>
-    CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW.has(normalizeCodexDynamicToolName(tool.name)),
-  );
+  return tools.filter((tool) => {
+    const name = readCodexDynamicToolName(tool);
+    return Boolean(
+      name && CODEX_MEMORY_FLUSH_DYNAMIC_TOOL_ALLOW.has(normalizeCodexDynamicToolName(name)),
+    );
+  });
 }
 
 export function shouldRequireCodexSandboxExecServerEnvironment(params: {
@@ -517,10 +521,8 @@ export function addSandboxShellDynamicToolsIfAvailable(
   ) {
     return filteredTools;
   }
-  const execTool = allTools.find((tool) => normalizeCodexDynamicToolName(tool.name) === "exec");
-  const processTool = allTools.find(
-    (tool) => normalizeCodexDynamicToolName(tool.name) === "process",
-  );
+  const execTool = allTools.find((tool) => hasCodexDynamicToolName(tool, "exec"));
+  const processTool = allTools.find((tool) => hasCodexDynamicToolName(tool, "process"));
   if (!execTool || !processTool) {
     return filteredTools;
   }
@@ -604,12 +606,10 @@ function addNodeShellDynamicToolsIfNeeded(
     if (isCodexDynamicToolExcluded(input.pluginConfig, [toolName])) {
       continue;
     }
-    if (next.some((tool) => normalizeCodexDynamicToolName(tool.name) === toolName)) {
+    if (next.some((tool) => hasCodexDynamicToolName(tool, toolName))) {
       continue;
     }
-    const tool = allTools.find(
-      (candidate) => normalizeCodexDynamicToolName(candidate.name) === toolName,
-    );
+    const tool = allTools.find((candidate) => hasCodexDynamicToolName(candidate, toolName));
     if (!tool) {
       continue;
     }
@@ -619,6 +619,11 @@ function addNodeShellDynamicToolsIfNeeded(
     next.push(tool);
   }
   return next;
+}
+
+function hasCodexDynamicToolName(tool: { name?: unknown }, expected: string): boolean {
+  const name = readCodexDynamicToolName(tool);
+  return Boolean(name && normalizeCodexDynamicToolName(name) === expected);
 }
 
 export function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
@@ -631,20 +636,26 @@ export function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
   if (toolsAllow.length === 0) {
     return [];
   }
+  const entries = tools.flatMap((tool) => {
+    const name = readCodexDynamicToolName(tool);
+    return name ? [{ tool, name }] : [];
+  });
   if (hasWildcardCodexToolsAllow(toolsAllow)) {
-    return tools;
+    return entries.map((entry) => entry.tool);
   }
   const allowSet = new Set(
     toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
   );
-  return tools.filter((tool) => {
-    const normalized = normalizeCodexDynamicToolName(tool.name);
-    return (
-      allowSet.has(normalized) ||
-      (normalized === "sandbox_exec" && allowSet.has("exec")) ||
-      (normalized === "sandbox_process" && (allowSet.has("exec") || allowSet.has("process")))
-    );
-  });
+  return entries
+    .filter((entry) => {
+      const normalized = normalizeCodexDynamicToolName(entry.name);
+      return (
+        allowSet.has(normalized) ||
+        (normalized === "sandbox_exec" && allowSet.has("exec")) ||
+        (normalized === "sandbox_process" && (allowSet.has("exec") || allowSet.has("process")))
+      );
+    })
+    .map((entry) => entry.tool);
 }
 
 export function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {

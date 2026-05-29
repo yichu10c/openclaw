@@ -29,6 +29,14 @@ export function normalizeCodexDynamicToolName(name: string): string {
   return DYNAMIC_TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
 
+export function readCodexDynamicToolName(tool: { name?: unknown }): string | undefined {
+  try {
+    return typeof tool.name === "string" ? tool.name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function isForcedPrivateQaCodexRuntime(
   env: CodexDynamicToolProfileEnv = process.env,
 ): boolean {
@@ -64,7 +72,13 @@ export function filterCodexDynamicTools<T extends { name: string }>(
       excludes.add(trimmed);
     }
   }
+  const entries = tools.flatMap((tool) => {
+    const name = readCodexDynamicToolName(tool);
+    return name ? [{ tool, name }] : [];
+  });
   return excludes.size === 0
-    ? tools
-    : tools.filter((tool) => !excludes.has(normalizeCodexDynamicToolName(tool.name)));
+    ? entries.map((entry) => entry.tool)
+    : entries
+        .filter((entry) => !excludes.has(normalizeCodexDynamicToolName(entry.name)))
+        .map((entry) => entry.tool);
 }

@@ -16,6 +16,24 @@ describe("Codex dynamic tool filtering", () => {
     expect(toolNames).not.toContain("image");
   });
 
+  it("preserves unreadable tool names as opaque non-image siblings", () => {
+    const unreadable = {};
+    Object.defineProperty(unreadable, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin vision tool name is unreadable");
+      },
+    });
+    const read = { name: "read" };
+
+    expect(
+      filterToolsForVisionInputs([unreadable, { name: "image" }, read], {
+        modelHasVision: true,
+        hasInboundImages: true,
+      }),
+    ).toEqual([unreadable, read]);
+  });
+
   it("keeps the image tool unless both model vision and inbound images are present", () => {
     const tools = [{ name: "image" }, { name: "read" }];
 

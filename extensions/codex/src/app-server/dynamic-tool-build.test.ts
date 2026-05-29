@@ -90,6 +90,17 @@ function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTest {
   };
 }
 
+function createUnreadableNameRuntimeDynamicTool(): RuntimeDynamicToolForTest {
+  const tool = createRuntimeDynamicTool("mockplugin_unreadable_dynamic");
+  Object.defineProperty(tool, "name", {
+    enumerable: true,
+    get() {
+      throw new Error("fuzzplugin dynamic tool name is unreadable");
+    },
+  });
+  return tool;
+}
+
 async function buildDynamicToolsForTest(
   params: EmbeddedRunAttemptParams,
   workspaceDir: string,
@@ -153,6 +164,17 @@ describe("Codex app-server dynamic tool build", () => {
     ]);
   });
 
+  it("omits unreadable Codex dynamic tool names while preserving healthy siblings", () => {
+    const unreadable = createUnreadableNameRuntimeDynamicTool();
+    const tools = [
+      createRuntimeDynamicTool("read"),
+      unreadable,
+      createRuntimeDynamicTool("message"),
+    ];
+
+    expect(filterCodexDynamicTools(tools, {}).map((tool) => tool.name)).toEqual(["message"]);
+  });
+
   it("applies additional Codex dynamic tool excludes without exposing Codex-native tools", () => {
     const tools = ["read", "exec", "message", "custom_tool"].map((name) => ({ name }));
 
@@ -164,7 +186,13 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it("exposes app-server-owned tools directly for forced private QA Codex runtime", () => {
-    const tools = ["read", "write", "image_generate", "message"].map((name) => ({ name }));
+    const tools = [
+      { name: "read" },
+      { name: "write" },
+      createUnreadableNameRuntimeDynamicTool(),
+      { name: "image_generate" },
+      { name: "message" },
+    ];
     const privateQaCodexEnv = {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_QA_FORCE_RUNTIME: "codex",
@@ -213,6 +241,29 @@ describe("Codex app-server dynamic tool build", () => {
       trigger: "memory",
       memoryFlushWritePath: "memory/2026-05-22.md",
     });
+    expect(tools.map((tool) => tool.name)).toEqual(["read", "write"]);
+  });
+
+  it("omits unreadable dynamic tool names during memory flush filtering", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("read"),
+      createUnreadableNameRuntimeDynamicTool(),
+      createRuntimeDynamicTool("write"),
+      createRuntimeDynamicTool("exec"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.trigger = "memory";
+    params.memoryFlushWritePath = "memory/2026-05-22.md";
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      sandbox: { enabled: true, backendId: "docker" } as never,
+      nativeToolSurfaceEnabled: false,
+    });
+
     expect(tools.map((tool) => tool.name)).toEqual(["read", "write"]);
   });
 
@@ -615,9 +666,15 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
-    const tools = ["exec", "sandbox_exec", "sandbox_process", "apply_patch", "read", "message"].map(
-      (name) => ({ name }),
-    );
+    const tools = [
+      { name: "exec" },
+      { name: "sandbox_exec" },
+      { name: "sandbox_process" },
+      { name: "apply_patch" },
+      { name: "read" },
+      createUnreadableNameRuntimeDynamicTool(),
+      { name: "message" },
+    ];
 
     expect(
       filterCodexDynamicToolsForAllowlist(tools, [" BASH ", "apply-patch", "READ"]).map(
@@ -633,9 +690,13 @@ describe("Codex app-server dynamic tool build", () => {
   });
 
   it("treats wildcard Codex dynamic toolsAllow as unrestricted", () => {
-    const tools = ["message", "web_search"].map((name) => ({ name }));
+    const tools = [
+      { name: "message" },
+      createUnreadableNameRuntimeDynamicTool(),
+      { name: "web_search" },
+    ];
 
-    expect(filterCodexDynamicToolsForAllowlist(tools, [" * "])).toEqual(tools);
+    expect(filterCodexDynamicToolsForAllowlist(tools, [" * "])).toEqual([tools[0], tools[2]]);
     expect(hasWildcardCodexToolsAllow([" * "])).toBe(true);
   });
 
