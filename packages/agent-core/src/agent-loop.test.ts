@@ -62,7 +62,15 @@ function createAssistantStream(
 ): EventStream<AssistantMessageEvent, AssistantMessage> {
   const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
     (event) => event.type === "done" || event.type === "error",
-    (event) => (event.type === "done" ? event.message : event.error),
+    (event) => {
+      if (event.type === "done") {
+        return event.message;
+      }
+      if (event.type === "error") {
+        return event.error;
+      }
+      throw new Error(`unexpected terminal event: ${event.type}`);
+    },
   );
   stream.push({ type: "done", reason: "toolUse", message });
   return stream;

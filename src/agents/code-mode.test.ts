@@ -204,10 +204,11 @@ describe("Code Mode", () => {
       get name() {
         throw new Error("fuzzplugin tool search name failed");
       },
+      label: "Malformed Plugin Tool",
       description: "Malformed plugin tool",
       parameters: { type: "object", properties: {} },
       execute: vi.fn(async () => jsonResult({ ok: true })),
-    } as AnyAgentTool;
+    } as unknown as AnyAgentTool;
     const healthy = pluginTool("mockplugin_create_ticket", "Create a mock ticket");
 
     const compacted = applyCodeModeCatalog({

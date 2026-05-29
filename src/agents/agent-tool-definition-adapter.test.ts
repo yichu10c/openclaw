@@ -170,7 +170,10 @@ describe("agent tool definition adapter", () => {
       label: "Unreadable",
       description: "unreadable name",
       parameters: Type.Object({}),
-      execute: async () => ({ content: [{ type: "text", text: "unreachable" }] }),
+      execute: async () => ({
+        content: [{ type: "text", text: "unreachable" }],
+        details: undefined,
+      }),
     } satisfies AgentTool;
     Object.defineProperty(unreadableTool, "name", {
       enumerable: true,
@@ -183,7 +186,10 @@ describe("agent tool definition adapter", () => {
       label: "Mock Plugin Healthy",
       description: "healthy sibling",
       parameters: Type.Object({}),
-      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      execute: async () => ({
+        content: [{ type: "text", text: "ok" }],
+        details: undefined,
+      }),
     } satisfies AgentTool;
 
     const definitions = toToolDefinitions([unreadableTool, healthyTool]);
@@ -197,7 +203,10 @@ describe("agent tool definition adapter", () => {
       label: "Mock Plugin Optional Fields",
       description: "optional fields",
       parameters: Type.Object({ value: Type.String() }),
-      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      execute: async () => ({
+        content: [{ type: "text", text: "ok" }],
+        details: undefined,
+      }),
     } satisfies AgentTool;
     Object.defineProperty(tool, "label", {
       enumerable: true,

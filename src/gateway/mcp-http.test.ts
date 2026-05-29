@@ -213,7 +213,7 @@ describe("mcp loopback server", () => {
         unreadableDescription,
         unreadableParameters,
         healthyTool,
-      ]),
+      ] as unknown as Parameters<typeof buildMcpToolSchema>[0]),
     ).toEqual([
       {
         name: "mockplugin_unreadable_description",

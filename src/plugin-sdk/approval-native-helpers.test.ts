@@ -342,10 +342,11 @@ describe("createChannelApproverDmTargetResolver", () => {
           id: "plugin-approval-1",
           request: {
             agentId: "mock-agent",
+            title: "Plugin approval",
+            description: "Allow synthetic plugin access",
           },
-          policy: {
-            alwaysAllow: false,
-          },
+          createdAtMs: 0,
+          expiresAtMs: 1000,
         },
       }),
     ).toStrictEqual([{ to: "mock-user-1" }, { to: "mock-user-2" }]);
