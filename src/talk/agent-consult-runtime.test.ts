@@ -7,6 +7,7 @@ import {
   resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "./agent-consult-runtime.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "./agent-consult-tool.js";
+import type { RealtimeVoiceTool } from "./provider-types.js";
 
 function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
   const sessionStore: Record<
@@ -141,6 +142,42 @@ describe("realtime voice agent consult runtime", () => {
     ]);
     expect(resolveRealtimeVoiceAgentConsultToolsAllow("owner")).toBeUndefined();
     expect(resolveRealtimeVoiceAgentConsultToolsAllow("none")).toStrictEqual([]);
+  });
+
+  it("omits unreadable synthetic realtime consult tools while preserving healthy tools", () => {
+    const unreadableTool: Record<string, unknown> = {};
+    Object.defineProperties(unreadableTool, {
+      name: {
+        enumerable: true,
+        get() {
+          throw new Error("fuzzplugin realtime consult tool name read failed");
+        },
+      },
+      parameters: {
+        enumerable: true,
+        get() {
+          throw new Error("fuzzplugin realtime consult tool parameters read failed");
+        },
+      },
+    });
+    const healthyTool = {
+      type: "function",
+      name: "mockplugin_lookup",
+      description: "Look up mockplugin details",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+        },
+      },
+    } satisfies RealtimeVoiceTool;
+
+    expect(
+      resolveRealtimeVoiceAgentConsultTools("safe-read-only", [
+        unreadableTool as unknown as RealtimeVoiceTool,
+        healthyTool,
+      ]).map((tool) => tool.name),
+    ).toEqual(["openclaw_agent_consult", "mockplugin_lookup"]);
   });
 
   it("runs an embedded agent using the shared session and prompt contract", async () => {

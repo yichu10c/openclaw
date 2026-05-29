@@ -66,6 +66,51 @@ const SAFE_READ_ONLY_TOOLS = [
   "memory_get",
 ] as const;
 
+function readRealtimeVoiceToolField(
+  tool: RealtimeVoiceTool,
+  field: "description" | "name" | "parameters" | "type",
+): { readable: true; value: unknown } | { readable: false } {
+  try {
+    return { readable: true, value: tool[field] };
+  } catch {
+    return { readable: false };
+  }
+}
+
+function normalizeRealtimeVoiceCustomTool(tool: RealtimeVoiceTool): RealtimeVoiceTool | undefined {
+  const rawType = readRealtimeVoiceToolField(tool, "type");
+  if (!rawType.readable || rawType.value !== "function") {
+    return undefined;
+  }
+  const rawName = readRealtimeVoiceToolField(tool, "name");
+  if (!rawName.readable || typeof rawName.value !== "string") {
+    return undefined;
+  }
+  const name = rawName.value.trim();
+  if (!name) {
+    return undefined;
+  }
+  const rawDescription = readRealtimeVoiceToolField(tool, "description");
+  if (!rawDescription.readable || typeof rawDescription.value !== "string") {
+    return undefined;
+  }
+  const rawParameters = readRealtimeVoiceToolField(tool, "parameters");
+  if (
+    !rawParameters.readable ||
+    !rawParameters.value ||
+    typeof rawParameters.value !== "object" ||
+    Array.isArray(rawParameters.value)
+  ) {
+    return undefined;
+  }
+  return {
+    type: "function",
+    name,
+    description: rawDescription.value,
+    parameters: rawParameters.value as RealtimeVoiceTool["parameters"],
+  };
+}
+
 export function isRealtimeVoiceAgentConsultToolPolicy(
   value: unknown,
 ): value is RealtimeVoiceAgentConsultToolPolicy {
@@ -94,8 +139,9 @@ export function resolveRealtimeVoiceAgentConsultTools(
     tools.set(REALTIME_VOICE_AGENT_CONSULT_TOOL.name, REALTIME_VOICE_AGENT_CONSULT_TOOL);
   }
   for (const tool of customTools) {
-    if (!tools.has(tool.name)) {
-      tools.set(tool.name, tool);
+    const normalized = normalizeRealtimeVoiceCustomTool(tool);
+    if (normalized && !tools.has(normalized.name)) {
+      tools.set(normalized.name, normalized);
     }
   }
   return [...tools.values()];
