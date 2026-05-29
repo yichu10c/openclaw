@@ -90,7 +90,7 @@ export function createActionGate<T extends Record<string, boolean | undefined>>(
     if (value === undefined) {
       return defaultValue;
     }
-    return value !== false;
+    return value;
   };
 }
 
