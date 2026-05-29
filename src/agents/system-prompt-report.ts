@@ -42,6 +42,35 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
     .filter((b) => b.blockChars > 0);
 }
 
+function readToolField(
+  tool: AgentTool,
+  key: "name" | "description" | "label" | "parameters",
+): unknown {
+  try {
+    return tool[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readToolStringField(tool: AgentTool, key: "name" | "description" | "label"): string {
+  const value = readToolField(tool, key);
+  return typeof value === "string" ? value : "";
+}
+
+function countSchemaProperties(parameters: AgentTool["parameters"]): number | null {
+  try {
+    const schema = parameters as Record<string, unknown>;
+    const props = typeof schema.properties === "object" ? schema.properties : null;
+    if (!props || typeof props !== "object") {
+      return null;
+    }
+    return Object.keys(props as Record<string, unknown>).length;
+  } catch {
+    return null;
+  }
+}
+
 function buildToolSchemaStats(
   parameters: AgentTool["parameters"],
 ): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
@@ -61,31 +90,31 @@ function buildToolSchemaStats(
   const stats = {
     schemaChars: schemaJson.length,
     schemaHash: sha256(schemaJson),
-    propertiesCount: (() => {
-      const schema = parameters as Record<string, unknown>;
-      const props = typeof schema.properties === "object" ? schema.properties : null;
-      if (!props || typeof props !== "object") {
-        return null;
-      }
-      return Object.keys(props as Record<string, unknown>).length;
-    })(),
+    propertiesCount: countSchemaProperties(parameters),
   };
   toolSchemaStatsCache.set(parameters, stats);
   return stats;
 }
 
 function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
-  return tools.map((tool) => {
-    const cached = toolReportEntryCache.get(tool);
+  return tools.map((tool, index) => {
+    const readableName = readToolStringField(tool, "name").trim();
+    const useCache = Boolean(readableName);
+    const cached = useCache ? toolReportEntryCache.get(tool) : undefined;
     if (cached) {
       return cached;
     }
-    const name = tool.name;
-    const summary = tool.description?.trim() || tool.label?.trim() || "";
+    const name = readableName || `tool[${index}]`;
+    const summary =
+      readToolStringField(tool, "description").trim() || readToolStringField(tool, "label").trim();
     const summaryChars = summary.length;
-    const schemaStats = buildToolSchemaStats(tool.parameters);
+    const schemaStats = buildToolSchemaStats(
+      readToolField(tool, "parameters") as AgentTool["parameters"],
+    );
     const entry = { name, summaryChars, summaryHash: sha256(summary), ...schemaStats };
-    toolReportEntryCache.set(tool, entry);
+    if (useCache) {
+      toolReportEntryCache.set(tool, entry);
+    }
     return entry;
   });
 }

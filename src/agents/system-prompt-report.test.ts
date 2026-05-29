@@ -216,4 +216,68 @@ describe("buildSystemPromptReport", () => {
     });
     expect(report.tools.entries[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
   });
+
+  it("keeps reporting when synthetic tool descriptors are unreadable", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
+    const unreadableName: Record<string, unknown> = {
+      description: "Unreadable name",
+      parameters: { type: "object", properties: {} },
+    };
+    Object.defineProperty(unreadableName, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin prompt report name read failed");
+      },
+    });
+    const unreadableParameters: Record<string, unknown> = {
+      name: "fuzz_move_report",
+      description: "Unreadable parameters",
+    };
+    Object.defineProperty(unreadableParameters, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("mockplugin prompt report parameters read failed");
+      },
+    });
+
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [
+        unreadableName,
+        unreadableParameters,
+        {
+          name: "exec",
+          description: "Run shell commands",
+          parameters: {
+            type: "object",
+            properties: { command: { type: "string" } },
+          },
+        },
+      ] as never,
+    });
+
+    expect(report.tools.entries).toEqual([
+      expect.objectContaining({
+        name: "tool[0]",
+        schemaChars: expect.any(Number),
+        propertiesCount: 0,
+      }),
+      expect.objectContaining({
+        name: "fuzz_move_report",
+        schemaChars: 0,
+        propertiesCount: null,
+      }),
+      expect.objectContaining({
+        name: "exec",
+        schemaChars: expect.any(Number),
+        propertiesCount: 1,
+      }),
+    ]);
+  });
 });
