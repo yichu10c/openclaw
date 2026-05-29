@@ -31,6 +31,7 @@ import type {
 } from "../types.js";
 import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
+import { projectProviderTools } from "./tool-projection.js";
 import { transformMessages } from "./transform-messages.js";
 
 export type GoogleApiType = "google-generative-ai" | "google-vertex";
@@ -368,18 +369,24 @@ export function convertTools(
   tools: Tool[],
   useParameters = false,
 ): { functionDeclarations: Record<string, unknown>[] }[] | undefined {
-  if (tools.length === 0) {
+  const projectedTools = projectProviderTools(tools);
+  if (projectedTools.length === 0) {
     return undefined;
   }
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        ...(useParameters
-          ? { parameters: sanitizeForOpenApi(tool.parameters as unknown) }
-          : { parametersJsonSchema: tool.parameters }),
-      })),
+      functionDeclarations: projectedTools.map((tool) => {
+        const declaration: Record<string, unknown> = { name: tool.name };
+        if (tool.description !== undefined) {
+          declaration.description = tool.description;
+        }
+        if (useParameters) {
+          declaration.parameters = sanitizeForOpenApi(tool.parameters);
+        } else {
+          declaration.parametersJsonSchema = tool.parameters;
+        }
+        return declaration;
+      }),
     },
   ];
 }

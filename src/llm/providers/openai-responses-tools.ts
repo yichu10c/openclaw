@@ -8,6 +8,7 @@ import {
 } from "../../agents/openai-tool-schema.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { Model, Tool } from "../types.js";
+import { projectProviderTools } from "./tool-projection.js";
 
 export interface ConvertResponsesToolsOptions {
   strict?: boolean | null;
@@ -33,18 +34,21 @@ export function convertResponsesTools(
   options?: ConvertResponsesToolsOptions,
 ): OpenAITool[] {
   const strictSetting = resolveResponsesStrictToolSetting(options);
-  const strict = resolveResponsesStrictToolFlag(tools, strictSetting, options?.model);
-  return sortResponsesToolsByName(tools).map((tool) => {
+  const projectedTools = projectProviderTools(tools);
+  const strict = resolveResponsesStrictToolFlag(projectedTools, strictSetting, options?.model);
+  return sortResponsesToolsByName(projectedTools).map((tool) => {
     const result: ResponsesFunctionTool = {
       type: "function",
       name: tool.name,
-      description: tool.description,
       parameters: normalizeOpenAIStrictToolParameters(
         tool.parameters,
         strict === true,
         options?.model?.compat as OpenAIToolSchemaCompat,
-      ) as Record<string, unknown>,
+      ),
     };
+    if (tool.description !== undefined) {
+      result.description = tool.description;
+    }
     if (strict !== undefined) {
       result.strict = strict;
     }
@@ -68,7 +72,7 @@ function resolveResponsesStrictToolSetting(
 }
 
 function resolveResponsesStrictToolFlag(
-  tools: Tool[],
+  tools: readonly Pick<Tool, "name" | "parameters">[],
   strictSetting: boolean | null | undefined,
   model: Model | undefined,
 ): boolean | undefined {

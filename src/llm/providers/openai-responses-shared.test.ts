@@ -121,4 +121,82 @@ describe("convertResponsesTools", () => {
       convertResponsesTools([zeta, alpha]).map((tool) => expectResponsesFunctionTool(tool).name),
     ).toEqual(["alpha", "zeta"]);
   });
+
+  it("omits unreadable or unsupported provider tools without dropping valid siblings", () => {
+    const unreadableName = Object.defineProperty(
+      {
+        description: "Bad name",
+        parameters: { type: "object", properties: {} },
+      },
+      "name",
+      {
+        get() {
+          throw new Error("fuzzplugin name exploded");
+        },
+      },
+    ) as unknown as Tool;
+    const unreadableParameters = Object.defineProperty(
+      {
+        name: "fuzzplugin_unreadable_parameters",
+        description: "Bad parameters",
+        parameters: undefined,
+      },
+      "parameters",
+      {
+        get() {
+          throw new Error("fuzzplugin parameters exploded");
+        },
+      },
+    ) as unknown as Tool;
+    const unsupportedDynamicSchema = {
+      name: "fuzzplugin_dynamic_schema",
+      description: "Unsupported schema",
+      parameters: { type: "object", properties: { target: { $dynamicRef: "#target" } } },
+    } as unknown as Tool;
+    const unreadableDescription = Object.defineProperty(
+      {
+        name: "mockplugin_status",
+        description: undefined,
+        parameters: { type: "object", properties: {} },
+      },
+      "description",
+      {
+        get() {
+          throw new Error("mockplugin description exploded");
+        },
+      },
+    ) as unknown as Tool;
+    const healthy = {
+      name: "mockplugin_lookup",
+      description: "Lookup",
+      parameters: { type: "object", properties: {} },
+    } as unknown as Tool;
+
+    const converted = convertResponsesTools(
+      [
+        unreadableName,
+        unreadableParameters,
+        unsupportedDynamicSchema,
+        unreadableDescription,
+        healthy,
+      ],
+      { strict: false },
+    ).map(expectResponsesFunctionTool);
+
+    expect(converted).toEqual([
+      {
+        type: "function",
+        name: "mockplugin_lookup",
+        description: "Lookup",
+        strict: false,
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        type: "function",
+        name: "mockplugin_status",
+        strict: false,
+        parameters: { type: "object", properties: {} },
+      },
+    ]);
+  });
 });

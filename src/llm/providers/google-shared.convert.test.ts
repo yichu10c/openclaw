@@ -148,6 +148,81 @@ describe("google-shared convertTools", () => {
     expect(config.required).toEqual(["retries"]);
     expect(params.required).toEqual(["config"]);
   });
+
+  it("omits unreadable or unsupported provider tools without dropping valid siblings", () => {
+    const unreadableName = Object.defineProperty(
+      {
+        description: "Bad name",
+        parameters: { type: "object", properties: {} },
+      },
+      "name",
+      {
+        get() {
+          throw new Error("fuzzplugin name exploded");
+        },
+      },
+    ) as unknown as Tool;
+    const unreadableParameters = Object.defineProperty(
+      {
+        name: "fuzzplugin_unreadable_parameters",
+        description: "Bad parameters",
+        parameters: undefined,
+      },
+      "parameters",
+      {
+        get() {
+          throw new Error("fuzzplugin parameters exploded");
+        },
+      },
+    ) as unknown as Tool;
+    const unsupportedDynamicSchema = {
+      name: "fuzzplugin_dynamic_schema",
+      description: "Unsupported schema",
+      parameters: { type: "object", properties: { target: { $dynamicRef: "#target" } } },
+    } as unknown as Tool;
+    const unreadableDescription = Object.defineProperty(
+      {
+        name: "mockplugin_status",
+        description: undefined,
+        parameters: { type: "object", properties: {} },
+      },
+      "description",
+      {
+        get() {
+          throw new Error("mockplugin description exploded");
+        },
+      },
+    ) as unknown as Tool;
+    const healthy = {
+      name: "mockplugin_lookup",
+      description: "Lookup",
+      parameters: { type: "object", properties: {} },
+    } as unknown as Tool;
+
+    const converted = convertTools(
+      [
+        unreadableName,
+        unreadableParameters,
+        unsupportedDynamicSchema,
+        unreadableDescription,
+        healthy,
+      ],
+      true,
+    );
+    const declarations = converted?.[0]?.functionDeclarations;
+
+    expect(declarations).toEqual([
+      {
+        name: "mockplugin_status",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        name: "mockplugin_lookup",
+        description: "Lookup",
+        parameters: { type: "object", properties: {} },
+      },
+    ]);
+  });
 });
 
 describe("google-shared convertMessages", () => {
