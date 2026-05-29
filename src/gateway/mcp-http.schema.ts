@@ -11,6 +11,45 @@ export type McpToolSchemaEntry = {
   inputSchema: Record<string, unknown>;
 };
 
+function readLoopbackToolField(tool: McpLoopbackTool, key: "name" | "description" | "parameters") {
+  try {
+    return (tool as unknown as Record<typeof key, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+export function readMcpLoopbackToolName(tool: McpLoopbackTool): string | undefined {
+  const value = readLoopbackToolField(tool, "name");
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const name = value.trim();
+  return name || undefined;
+}
+
+function readLoopbackToolDescription(tool: McpLoopbackTool): string | undefined {
+  const value = readLoopbackToolField(tool, "description");
+  return typeof value === "string" ? value : undefined;
+}
+
+function readLoopbackToolParameters(tool: McpLoopbackTool): Record<string, unknown> | undefined {
+  let value;
+  try {
+    value = (tool as unknown as { parameters?: unknown }).parameters;
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return {};
+  }
+  try {
+    return { ...value };
+  } catch {
+    return undefined;
+  }
+}
+
 function flattenUnionSchema(raw: Record<string, unknown>): Record<string, unknown> {
   const variants = (raw.anyOf ?? raw.oneOf) as unknown[] | undefined;
   if (!Array.isArray(variants) || variants.length === 0) {
@@ -101,11 +140,15 @@ function isPropertySchema(value: unknown): value is boolean | Record<string, unk
 }
 
 export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry[] {
-  return tools.map((tool) => {
-    let raw =
-      tool.parameters && typeof tool.parameters === "object"
-        ? { ...(tool.parameters as Record<string, unknown>) }
-        : {};
+  return tools.flatMap((tool) => {
+    const name = readMcpLoopbackToolName(tool);
+    if (!name) {
+      return [];
+    }
+    let raw = readLoopbackToolParameters(tool);
+    if (!raw) {
+      return [];
+    }
     if (raw.anyOf || raw.oneOf) {
       raw = flattenUnionSchema(raw);
     }
@@ -116,8 +159,8 @@ export function buildMcpToolSchema(tools: McpLoopbackTool[]): McpToolSchemaEntry
       raw.properties = {};
     }
     return {
-      name: tool.name,
-      description: tool.description,
+      name,
+      description: readLoopbackToolDescription(tool),
       inputSchema: raw,
     };
   });
