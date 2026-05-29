@@ -144,6 +144,53 @@ function makeAnthropicTransportModel(
   );
 }
 
+function makeFuzzAnthropicTools(): unknown[] {
+  const unreadableName = Object.defineProperty(
+    {
+      description: "unreadable name",
+      parameters: { type: "object", properties: {} },
+    },
+    "name",
+    {
+      get() {
+        throw new Error("fuzzplugin name exploded");
+      },
+    },
+  );
+  const unreadableParameters = Object.defineProperty(
+    {
+      name: "fuzzplugin_unreadable_parameters",
+      description: "unreadable parameters",
+      parameters: undefined,
+    },
+    "parameters",
+    {
+      get() {
+        throw new Error("fuzzplugin parameters exploded");
+      },
+    },
+  );
+  const unsupportedDynamicSchema = {
+    name: "fuzzplugin_dynamic_schema",
+    description: "unsupported schema",
+    parameters: { type: "object", properties: { target: { $dynamicRef: "#target" } } },
+  };
+  const unreadableDescription = Object.defineProperty(
+    {
+      name: "mockplugin_unreadable_description",
+      description: undefined,
+      parameters: { type: "object", properties: { query: { type: "string" } } },
+    },
+    "description",
+    {
+      get() {
+        throw new Error("fuzzplugin description exploded");
+      },
+    },
+  );
+  return [unreadableName, unreadableParameters, unsupportedDynamicSchema, unreadableDescription];
+}
+
 async function runTransportStream(
   model: AnthropicMessagesModel,
   context: AnthropicStreamContext,
@@ -603,6 +650,7 @@ describe("anthropic transport stream", () => {
         } as unknown as Parameters<typeof streamFn>[1],
         {
           apiKey: "sk-ant-oat-example",
+          toolChoice: { type: "tool", name: "read" },
         } as Parameters<typeof streamFn>[2],
       ),
     );
@@ -631,6 +679,7 @@ describe("anthropic transport stream", () => {
         (item) => requireRecord(item, "tool").name === "Read",
       ),
     ).toBe(true);
+    expect(firstCallParams.tool_choice).toEqual({ type: "tool", name: "Read" });
     expect(result.stopReason).toBe("toolUse");
     expect(result.content.some((item) => item.type === "toolCall" && item.name === "read")).toBe(
       true,
@@ -1187,6 +1236,60 @@ describe("anthropic transport stream", () => {
     expect(requireRecord(tool.input_schema, "input schema").properties).toEqual({
       query: { type: "string" },
     });
+  });
+
+  it("omits unreadable Anthropic transport tools and stale tool choices", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          ...makeFuzzAnthropicTools(),
+          {
+            name: "mockplugin_lookup",
+            description: "valid schema",
+            parameters: {
+              type: "object",
+              properties: {
+                query: { type: "string" },
+              },
+              required: ["query"],
+            },
+          },
+        ],
+      } as unknown as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        toolChoice: { type: "tool", name: "fuzzplugin_dynamic_schema" },
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    const tools = requireArray(payload.tools, "tools");
+    expect(tools).toHaveLength(2);
+    const toolNames = tools.map((tool) => requireRecord(tool, "tool").name);
+    expect(toolNames).toEqual(["mockplugin_unreadable_description", "mockplugin_lookup"]);
+    expect(payload).not.toHaveProperty("tool_choice");
+    const unreadableDescriptionTool = requireRecord(tools[0], "unreadable description tool");
+    expect(unreadableDescriptionTool).not.toHaveProperty("description");
+  });
+
+  it("omits Anthropic transport tool metadata when every tool is quarantined", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+        tools: makeFuzzAnthropicTools().slice(0, 3),
+      } as unknown as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        toolChoice: "any",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload).not.toHaveProperty("tools");
+    expect(payload).not.toHaveProperty("tool_choice");
   });
 
   it("coerces replayed malformed tool-call args to an object for Anthropic payloads", async () => {

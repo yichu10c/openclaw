@@ -14,6 +14,7 @@ import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
+import { projectRuntimeToolInputSchema } from "./tool-schema-projection.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   coerceTransportToolCallArguments,
@@ -65,6 +66,13 @@ type AnthropicMessagesClient = {
     ): AsyncIterable<Record<string, unknown>>;
   };
 };
+type ProjectedAnthropicTransportTool = {
+  name: string;
+  description?: string;
+  parameters: Record<string, unknown>;
+};
+type AnthropicTransportToolField = "name" | "description" | "parameters";
+type AnthropicTransportToolInput = NonNullable<Context["tools"]>[number];
 
 function resolveAnthropicRequestModelId(model: AnthropicTransportModel): string {
   if (isDirectAnthropicModel(model) && /^anthropic\//i.test(model.id)) {
@@ -240,7 +248,10 @@ function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
 
-function fromClaudeCodeName(name: string, tools: Context["tools"] | undefined): string {
+function fromClaudeCodeName(
+  name: string,
+  tools: readonly Pick<ProjectedAnthropicTransportTool, "name">[] | undefined,
+): string {
   if (tools && tools.length > 0) {
     const lowerName = normalizeLowercaseStringOrEmpty(name);
     const matchedTool = tools.find(
@@ -251,6 +262,51 @@ function fromClaudeCodeName(name: string, tools: Context["tools"] | undefined): 
     }
   }
   return name;
+}
+
+function readAnthropicTransportToolField(
+  tool: AnthropicTransportToolInput,
+  field: AnthropicTransportToolField,
+): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: tool[field] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function projectAnthropicTransportTools(
+  tools: NonNullable<Context["tools"]>,
+): ProjectedAnthropicTransportTool[] {
+  return tools.flatMap((tool): ProjectedAnthropicTransportTool[] => {
+    const nameRead = readAnthropicTransportToolField(tool, "name");
+    if (!nameRead.ok || typeof nameRead.value !== "string" || nameRead.value.trim() === "") {
+      return [];
+    }
+    const parametersRead = readAnthropicTransportToolField(tool, "parameters");
+    if (!parametersRead.ok) {
+      return [];
+    }
+    const parametersProjection = projectRuntimeToolInputSchema(
+      parametersRead.value,
+      `${nameRead.value}.parameters`,
+    );
+    if (parametersProjection.violations.length > 0) {
+      return [];
+    }
+    const descriptionRead = readAnthropicTransportToolField(tool, "description");
+    const description =
+      descriptionRead.ok && typeof descriptionRead.value === "string"
+        ? descriptionRead.value
+        : undefined;
+    return [
+      {
+        name: nameRead.value,
+        ...(description !== undefined ? { description } : {}),
+        parameters: parametersProjection.schema as Record<string, unknown>,
+      },
+    ];
+  });
 }
 
 function convertContentBlocks(
@@ -474,10 +530,10 @@ function ensureNonEmptyAnthropicMessages(messages: Array<Record<string, unknown>
     : [{ role: "user", content: EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT }];
 }
 
-function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
-  if (!tools) {
-    return [];
-  }
+function convertAnthropicTools(
+  tools: readonly ProjectedAnthropicTransportTool[],
+  isOAuthToken: boolean,
+) {
   const converted: Array<{
     name: string;
     description?: string;
@@ -488,26 +544,39 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
     };
   }> = [];
   for (const tool of tools) {
-    // Main quarantine happens when plugin tools materialize; this keeps Anthropic
-    // safe for direct/custom tool arrays that bypass the plugin registry.
-    const parameters =
-      tool.parameters && typeof tool.parameters === "object" && !Array.isArray(tool.parameters)
-        ? (tool.parameters as Record<string, unknown>)
-        : undefined;
-    if (!parameters) {
-      continue;
-    }
     converted.push({
       name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
-      description: tool.description,
+      ...(tool.description !== undefined ? { description: tool.description } : {}),
       input_schema: {
         type: "object",
-        properties: parameters.properties || {},
-        required: parameters.required || [],
+        properties: tool.parameters.properties || {},
+        required: tool.parameters.required || [],
       },
     });
   }
   return converted;
+}
+
+function resolveAnthropicTransportToolChoice(
+  toolChoice: AnthropicTransportOptions["toolChoice"],
+  originalToolNames: ReadonlySet<string>,
+  providerToolNames: ReadonlySet<string>,
+  isOAuthToken: boolean,
+): Record<string, unknown> | undefined {
+  if (typeof toolChoice === "string") {
+    return providerToolNames.size > 0 ? { type: toolChoice } : undefined;
+  }
+  const targetName = toolChoice?.name;
+  if (!targetName) {
+    return undefined;
+  }
+  if (providerToolNames.has(targetName)) {
+    return toolChoice;
+  }
+  if (isOAuthToken && originalToolNames.has(targetName)) {
+    return { ...toolChoice, name: toClaudeCodeName(targetName) };
+  }
+  return undefined;
 }
 
 function parseAnthropicToolCallArguments(inputJson: string): unknown {
@@ -788,6 +857,7 @@ function buildAnthropicParams(
   context: Context,
   isOAuthToken: boolean,
   options: AnthropicTransportOptions | undefined,
+  projectedTools: readonly ProjectedAnthropicTransportTool[],
 ) {
   const maxTokens = resolveAnthropicMessagesMaxTokens({
     modelMaxTokens: model.maxTokens,
@@ -841,8 +911,8 @@ function buildAnthropicParams(
   if (options?.temperature !== undefined && !options.thinkingEnabled) {
     params.temperature = options.temperature;
   }
-  if (context.tools) {
-    params.tools = convertAnthropicTools(context.tools, isOAuthToken);
+  if (projectedTools.length > 0) {
+    params.tools = convertAnthropicTools(projectedTools, isOAuthToken);
   }
   if (model.reasoning) {
     if (options?.thinkingEnabled) {
@@ -865,8 +935,19 @@ function buildAnthropicParams(
     params.metadata = { user_id: options.metadata.user_id };
   }
   if (options?.toolChoice) {
-    params.tool_choice =
-      typeof options.toolChoice === "string" ? { type: options.toolChoice } : options.toolChoice;
+    const originalToolNames = new Set(projectedTools.map((tool) => tool.name));
+    const providerToolNames = new Set(
+      projectedTools.map((tool) => (isOAuthToken ? toClaudeCodeName(tool.name) : tool.name)),
+    );
+    const toolChoice = resolveAnthropicTransportToolChoice(
+      options.toolChoice,
+      originalToolNames,
+      providerToolNames,
+      isOAuthToken,
+    );
+    if (toolChoice !== undefined) {
+      params.tool_choice = toolChoice;
+    }
   }
   applyAnthropicPayloadPolicyToParams(params, payloadPolicy);
   return params;
@@ -955,7 +1036,16 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           apiKey,
           options: transportOptions,
         });
-        let params = buildAnthropicParams(model, context, isOAuthToken, transportOptions);
+        const projectedTools = context.tools?.length
+          ? projectAnthropicTransportTools(context.tools)
+          : [];
+        let params = buildAnthropicParams(
+          model,
+          context,
+          isOAuthToken,
+          transportOptions,
+          projectedTools,
+        );
         const nextParams = await transportOptions.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as Record<string, unknown>;
@@ -1180,7 +1270,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 name:
                   typeof contentBlock.name === "string"
                     ? isOAuthToken
-                      ? fromClaudeCodeName(contentBlock.name, context.tools)
+                      ? fromClaudeCodeName(contentBlock.name, projectedTools)
                       : contentBlock.name
                     : "",
                 arguments:
