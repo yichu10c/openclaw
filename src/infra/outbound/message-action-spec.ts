@@ -109,17 +109,40 @@ export function actionRequiresTarget(action: ChannelMessageActionName): boolean 
   return MESSAGE_ACTION_TARGET_MODE[action] !== "none";
 }
 
+function readTargetParam(params: Record<string, unknown>, key: string): unknown {
+  try {
+    return params[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function hasStringTargetValue(value: unknown): boolean {
+  if (typeof value === "string") {
+    return Boolean(normalizeOptionalString(value));
+  }
+  return false;
+}
+
+function hasAliasTargetValue(value: unknown): boolean {
+  if (hasStringTargetValue(value)) {
+    return true;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  return false;
+}
+
 export function actionHasTarget(
   action: ChannelMessageActionName,
   params: Record<string, unknown>,
   options?: { channel?: string },
 ): boolean {
-  const to = normalizeOptionalString(params.to) ?? "";
-  if (to) {
+  if (hasStringTargetValue(readTargetParam(params, "to"))) {
     return true;
   }
-  const channelId = normalizeOptionalString(params.channelId) ?? "";
-  if (channelId) {
+  if (hasStringTargetValue(readTargetParam(params, "channelId"))) {
     return true;
   }
   const specs = listActionTargetAliasSpecs(action, params, options?.channel);
@@ -127,15 +150,6 @@ export function actionHasTarget(
     return false;
   }
   return specs.some((spec) =>
-    spec.aliases.some((alias) => {
-      const value = params[alias];
-      if (typeof value === "string") {
-        return Boolean(normalizeOptionalString(value));
-      }
-      if (typeof value === "number") {
-        return Number.isFinite(value);
-      }
-      return false;
-    }),
+    spec.aliases.some((alias) => hasAliasTargetValue(readTargetParam(params, alias))),
   );
 }

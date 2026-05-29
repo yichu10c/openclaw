@@ -23,6 +23,8 @@ describe("actionHasTarget", () => {
     { action: "send", params: { to: "  channel:C1  " }, expected: true },
     { action: "channel-info", params: { channelId: "  C123  " }, expected: true },
     { action: "send", params: { to: "   ", channelId: "" }, expected: false },
+    { action: "send", params: { to: 42 }, expected: false },
+    { action: "channel-info", params: { channelId: 42 }, expected: false },
     {
       action: "read",
       params: { messageId: "msg_123" },
@@ -87,5 +89,39 @@ describe("actionHasTarget", () => {
     },
   ])("resolves target presence for %j", ({ action, params, ctx, expected }) => {
     expect(actionHasTarget(action as never, params, ctx)).toBe(expected);
+  });
+
+  it("treats unreadable synthetic legacy target params as absent", () => {
+    const params = {
+      get to() {
+        throw new Error("fuzzplugin legacy target getter failed");
+      },
+      get channelId() {
+        throw new Error("fuzzplugin legacy channel getter failed");
+      },
+    } as Record<string, unknown>;
+
+    expect(actionHasTarget("send", params)).toBe(false);
+  });
+
+  it("treats unreadable synthetic target aliases as absent", () => {
+    const params = {
+      get messageId() {
+        throw new Error("fuzzplugin message id getter failed");
+      },
+    } as Record<string, unknown>;
+
+    expect(actionHasTarget("edit", params)).toBe(false);
+  });
+
+  it("keeps plugin alias checks alive when synthetic plugin-param probes are unreadable", () => {
+    const params = {
+      get mockPluginParam() {
+        throw new Error("fuzzplugin plugin param getter failed");
+      },
+      messageId: "msg_123",
+    } as Record<string, unknown>;
+
+    expect(actionHasTarget("pin", params, { channel: "pinboard" })).toBe(true);
   });
 });

@@ -8,6 +8,7 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { applyTargetToParams } from "./channel-target.js";
+import { copyMessageActionParams } from "./message-action-param-copy.js";
 import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
 
 export function normalizeMessageActionInput(params: {
@@ -15,7 +16,7 @@ export function normalizeMessageActionInput(params: {
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
 }): Record<string, unknown> {
-  const normalizedArgs = { ...params.args };
+  const normalizedArgs = copyMessageActionParams(params.args);
   const { action, toolContext } = params;
   const explicitChannel = normalizeOptionalString(normalizedArgs.channel) ?? "";
   const inferredChannel =

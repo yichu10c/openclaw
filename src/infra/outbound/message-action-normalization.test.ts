@@ -57,6 +57,18 @@ describe("normalizeMessageActionInput", () => {
     {
       input: {
         action: "send",
+        args: {
+          to: 42,
+        },
+        toolContext: {
+          currentChannelId: "channel:C1",
+        },
+      },
+      expectedFields: { target: "channel:C1", to: "channel:C1" },
+    },
+    {
+      input: {
+        action: "send",
         args: {},
         toolContext: {
           currentChannelId: "channel:C1",
@@ -180,5 +192,58 @@ describe("normalizeMessageActionInput", () => {
         args: {},
       }),
     ).toThrow(/requires a target/);
+  });
+
+  it("fails closed when synthetic target params are unreadable", () => {
+    const args = {
+      get target() {
+        throw new Error("fuzzplugin target getter failed");
+      },
+    } as Record<string, unknown>;
+
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "send",
+        args,
+        toolContext: {
+          currentChannelId: "C12345678",
+        },
+      }),
+    ).toThrow("target could not be read");
+  });
+
+  it("fails closed instead of inferring context when synthetic target aliases are unreadable", () => {
+    const args = {
+      get messageId() {
+        throw new Error("fuzzplugin message id getter failed");
+      },
+    } as Record<string, unknown>;
+
+    expect(() =>
+      normalizeMessageActionInput({
+        action: "edit",
+        args,
+        toolContext: {
+          currentChannelId: "C12345678",
+        },
+      }),
+    ).toThrow("messageId could not be read");
+  });
+
+  it("treats unreadable synthetic payload-only params as absent", () => {
+    const args = {
+      target: "channel:C1",
+      get message() {
+        throw new Error("fuzzplugin message getter failed");
+      },
+    } as Record<string, unknown>;
+
+    const normalized = normalizeMessageActionInput({
+      action: "send",
+      args,
+    });
+
+    expect(normalized.target).toBe("channel:C1");
+    expect("message" in normalized).toBe(false);
   });
 });

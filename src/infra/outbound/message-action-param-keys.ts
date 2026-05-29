@@ -43,9 +43,21 @@ const STANDARD_MESSAGE_ACTION_PARAM_KEYS = new Set([
 ]);
 
 export function hasPotentialPluginActionParam(params: Record<string, unknown>): boolean {
-  return Object.entries(params).some(([key, value]) => {
+  let keys: string[];
+  try {
+    keys = Object.keys(params);
+  } catch {
+    return true;
+  }
+  return keys.some((key) => {
     if (STANDARD_MESSAGE_ACTION_PARAM_KEYS.has(key)) {
       return false;
+    }
+    let value: unknown;
+    try {
+      value = params[key];
+    } catch {
+      return true;
     }
     if (typeof value === "string") {
       return Boolean(normalizeOptionalString(value));
