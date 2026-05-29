@@ -178,8 +178,25 @@ function readPluginToolName(tool: unknown): string {
   if (!isRecord(tool)) {
     return "";
   }
+  let name: unknown;
+  try {
+    name = tool.name;
+  } catch {
+    return "";
+  }
   // Optional-tool allowlists need a best-effort name before full shape validation.
-  return typeof tool.name === "string" ? tool.name.trim() : "";
+  return typeof name === "string" ? name.trim() : "";
+}
+
+function readPluginToolField(
+  tool: Record<string, unknown>,
+  field: "execute" | "name" | "parameters",
+): { readable: true; value: unknown } | { readable: false } {
+  try {
+    return { readable: true, value: tool[field] };
+  } catch {
+    return { readable: false };
+  }
 }
 
 function toElapsedMs(value: number): number {
@@ -311,17 +328,29 @@ function describeMalformedPluginTool(tool: unknown): string | undefined {
   if (!isRecord(tool)) {
     return "tool must be an object";
   }
-  const name = readPluginToolName(tool);
+  const nameRead = readPluginToolField(tool, "name");
+  if (!nameRead.readable) {
+    return "unreadable name";
+  }
+  const name = typeof nameRead.value === "string" ? nameRead.value.trim() : "";
   if (!name) {
     return "missing non-empty name";
   }
-  if (typeof tool.execute !== "function") {
+  const executeRead = readPluginToolField(tool, "execute");
+  if (!executeRead.readable) {
+    return `${name} unreadable execute function`;
+  }
+  if (typeof executeRead.value !== "function") {
     return `${name} missing execute function`;
   }
-  if (!isRecord(tool.parameters)) {
+  const parametersRead = readPluginToolField(tool, "parameters");
+  if (!parametersRead.readable) {
+    return `${name} unreadable parameters object`;
+  }
+  if (!isRecord(parametersRead.value)) {
     return `${name} missing parameters object`;
   }
-  const parametersIssue = describeNonJsonCompatibleValue(tool.parameters, "parameters");
+  const parametersIssue = describeNonJsonCompatibleValue(parametersRead.value, "parameters");
   if (parametersIssue) {
     return `${name} parameters must be JSON-compatible: ${parametersIssue}`;
   }

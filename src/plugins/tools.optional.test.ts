@@ -161,6 +161,24 @@ function createMalformedTool(name: string) {
   };
 }
 
+function createToolWithUnreadableField(name: string, field: "execute" | "name" | "parameters") {
+  const descriptor: Record<string, unknown> = {
+    name,
+    description: `${name} tool`,
+    parameters: { type: "object", properties: {} },
+    async execute() {
+      return { content: [{ type: "text", text: "bad" }] };
+    },
+  };
+  Object.defineProperty(descriptor, field, {
+    enumerable: true,
+    get() {
+      throw new Error(`fuzzplugin ${field} is unreadable`);
+    },
+  });
+  return descriptor;
+}
+
 function installConsoleMethodSpy(method: "log" | "warn") {
   const spy = vi.fn();
   loggingState.rawConsole = {
@@ -1563,6 +1581,32 @@ describe("resolvePluginTools optional tools", () => {
       registry.diagnostics,
       "plugin tool is malformed (fuzzplugin): fuzz_move_angles parameters must be JSON-compatible",
     );
+  });
+
+  it("skips plugin tools with unreadable descriptor fields while keeping valid siblings", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "fuzzplugin",
+        optional: false,
+        source: "/tmp/fuzzplugin.js",
+        names: ["fuzz_move_name", "fuzz_move_execute", "fuzz_move_parameters", "fuzz_status"],
+        factory: () => [
+          createToolWithUnreadableField("fuzz_move_name", "name"),
+          createToolWithUnreadableField("fuzz_move_execute", "execute"),
+          createToolWithUnreadableField("fuzz_move_parameters", "parameters"),
+          makeTool("fuzz_status"),
+        ],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["fuzz_status"]);
+    expect(registry.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+      "plugin tool is malformed (fuzzplugin): unreadable name",
+      "plugin tool is malformed (fuzzplugin): fuzz_move_execute unreadable execute function",
+      "plugin tool is malformed (fuzzplugin): fuzz_move_parameters unreadable parameters object",
+    ]);
   });
 
   it("warns with plugin factory timing details when a factory is slow", () => {
