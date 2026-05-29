@@ -65,15 +65,22 @@ export function normalizeGeminiToolSchemas(
   if (!tools) {
     return ctx.tools;
   }
-  for (const tool of tools) {
-    if (!tool.parameters || typeof tool.parameters !== "object") {
-      normalized.push(tool);
+  for (let toolIndex = 0; toolIndex < tools.length; toolIndex += 1) {
+    const descriptor = readProviderToolDescriptor(tools[toolIndex]);
+    if (!descriptor) {
       continue;
     }
-    normalized.push({
-      ...tool,
-      parameters: cleanSchemaForGemini(tool.parameters),
-    });
+    if (!descriptor.parameters || typeof descriptor.parameters !== "object") {
+      normalized.push(descriptor.tool);
+      continue;
+    }
+    const nextTool = copyProviderToolWithParameters(
+      descriptor.tool,
+      cleanSchemaForGemini(descriptor.parameters),
+    );
+    if (nextTool) {
+      normalized.push(nextTool);
+    }
   }
   return normalized;
 }
@@ -83,15 +90,29 @@ export function inspectGeminiToolSchemas(
 ): ProviderToolSchemaDiagnostic[] {
   const tools = copyArrayEntries(ctx.tools);
   return (tools ?? []).flatMap((tool, toolIndex) => {
+    const descriptor = readProviderToolDescriptorForDiagnostics(tool, toolIndex);
+    if (!descriptor) {
+      const toolName = formatUnknownProviderToolName(toolIndex);
+      return [{ toolName, toolIndex, violations: [toolName] }];
+    }
+    if (!descriptor.parametersReadable) {
+      return [
+        {
+          toolName: descriptor.toolName,
+          toolIndex,
+          violations: [`${descriptor.toolName}.parameters`],
+        },
+      ];
+    }
     const violations = findUnsupportedSchemaKeywords(
-      tool.parameters,
-      `${tool.name}.parameters`,
+      descriptor.parameters,
+      `${descriptor.toolName}.parameters`,
       GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
     );
     if (violations.length === 0) {
       return [];
     }
-    return [{ toolName: tool.name, toolIndex, violations }];
+    return [{ toolName: descriptor.toolName, toolIndex, violations }];
   });
 }
 
@@ -106,22 +127,32 @@ export function normalizeOpenAIToolSchemas(
   if (!tools) {
     return ctx.tools;
   }
-  for (const tool of tools) {
-    if (tool.parameters == null) {
-      normalized.push({
-        ...tool,
-        parameters: normalizeOpenAIStrictCompatSchema({}),
-      });
+  for (let toolIndex = 0; toolIndex < tools.length; toolIndex += 1) {
+    const descriptor = readProviderToolDescriptor(tools[toolIndex]);
+    if (!descriptor) {
       continue;
     }
-    if (typeof tool.parameters !== "object") {
-      normalized.push(tool);
+    if (descriptor.parameters == null) {
+      const nextTool = copyProviderToolWithParameters(
+        descriptor.tool,
+        normalizeOpenAIStrictCompatSchema({}),
+      );
+      if (nextTool) {
+        normalized.push(nextTool);
+      }
       continue;
     }
-    normalized.push({
-      ...tool,
-      parameters: normalizeOpenAIStrictCompatSchema(tool.parameters),
-    });
+    if (typeof descriptor.parameters !== "object") {
+      normalized.push(descriptor.tool);
+      continue;
+    }
+    const nextTool = copyProviderToolWithParameters(
+      descriptor.tool,
+      normalizeOpenAIStrictCompatSchema(descriptor.parameters),
+    );
+    if (nextTool) {
+      normalized.push(nextTool);
+    }
   }
   return normalized;
 }
@@ -526,20 +557,24 @@ export function normalizeDeepSeekToolSchemas(
   if (!tools) {
     return ctx.tools;
   }
-  for (const tool of tools) {
-    if (!tool.parameters || typeof tool.parameters !== "object") {
-      normalized.push(tool);
+  for (let toolIndex = 0; toolIndex < tools.length; toolIndex += 1) {
+    const descriptor = readProviderToolDescriptor(tools[toolIndex]);
+    if (!descriptor) {
       continue;
     }
-    const parameters = normalizeDeepSeekSchema(tool.parameters);
-    normalized.push(
-      parameters === tool.parameters
-        ? tool
-        : {
-            ...tool,
-            parameters: parameters as TSchema,
-          },
-    );
+    if (!descriptor.parameters || typeof descriptor.parameters !== "object") {
+      normalized.push(descriptor.tool);
+      continue;
+    }
+    const parameters = normalizeDeepSeekSchema(descriptor.parameters);
+    if (parameters === descriptor.parameters) {
+      normalized.push(descriptor.tool);
+      continue;
+    }
+    const nextTool = copyProviderToolWithParameters(descriptor.tool, parameters as TSchema);
+    if (nextTool) {
+      normalized.push(nextTool);
+    }
   }
   return normalized;
 }
@@ -549,15 +584,29 @@ export function inspectDeepSeekToolSchemas(
 ): ProviderToolSchemaDiagnostic[] {
   const tools = copyArrayEntries(ctx.tools);
   return (tools ?? []).flatMap((tool, toolIndex) => {
+    const descriptor = readProviderToolDescriptorForDiagnostics(tool, toolIndex);
+    if (!descriptor) {
+      const toolName = formatUnknownProviderToolName(toolIndex);
+      return [{ toolName, toolIndex, violations: [toolName] }];
+    }
+    if (!descriptor.parametersReadable) {
+      return [
+        {
+          toolName: descriptor.toolName,
+          toolIndex,
+          violations: [`${descriptor.toolName}.parameters`],
+        },
+      ];
+    }
     const violations = findUnsupportedSchemaKeywords(
-      tool.parameters,
-      `${tool.name}.parameters`,
+      descriptor.parameters,
+      `${descriptor.toolName}.parameters`,
       DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS,
     );
     if (violations.length === 0) {
       return [];
     }
-    return [{ toolName: tool.name, toolIndex, violations }];
+    return [{ toolName: descriptor.toolName, toolIndex, violations }];
   });
 }
 
@@ -598,6 +647,82 @@ function copyArrayEntries<T>(values: readonly T[]): T[] | undefined {
   } catch {
     return undefined;
   }
+}
+
+function formatUnknownProviderToolName(toolIndex: number): string {
+  return `tool[${toolIndex}]`;
+}
+
+function readProviderToolDescriptor(
+  tool: unknown,
+): { tool: AnyAgentTool; toolName: string; parameters: unknown } | undefined {
+  if (!tool || typeof tool !== "object") {
+    return undefined;
+  }
+  let toolName: unknown;
+  let parameters: unknown;
+  try {
+    toolName = (tool as AnyAgentTool).name;
+    parameters = (tool as AnyAgentTool).parameters;
+  } catch {
+    return undefined;
+  }
+  if (typeof toolName !== "string" || !toolName.trim()) {
+    return undefined;
+  }
+  return { tool: tool as AnyAgentTool, toolName, parameters };
+}
+
+function readProviderToolDescriptorForDiagnostics(
+  tool: unknown,
+  toolIndex: number,
+):
+  | {
+      toolName: string;
+      parameters: unknown;
+      parametersReadable: true;
+    }
+  | {
+      toolName: string;
+      parametersReadable: false;
+    }
+  | undefined {
+  if (!tool || typeof tool !== "object") {
+    return undefined;
+  }
+  let rawName: unknown;
+  try {
+    rawName = (tool as AnyAgentTool).name;
+  } catch {
+    rawName = undefined;
+  }
+  const toolName =
+    typeof rawName === "string" && rawName.trim()
+      ? rawName
+      : formatUnknownProviderToolName(toolIndex);
+  try {
+    return {
+      toolName,
+      parameters: (tool as AnyAgentTool).parameters,
+      parametersReadable: true,
+    };
+  } catch {
+    return { toolName, parametersReadable: false };
+  }
+}
+
+function copyProviderToolWithParameters(
+  tool: AnyAgentTool,
+  parameters: unknown,
+): AnyAgentTool | undefined {
+  const entries = copyObjectEntries(tool as unknown as Record<string, unknown>);
+  if (!entries) {
+    return undefined;
+  }
+  return {
+    ...Object.fromEntries(entries),
+    parameters,
+  } as AnyAgentTool;
 }
 
 function hasRecordKey(record: Record<string, unknown>, key: string): boolean {

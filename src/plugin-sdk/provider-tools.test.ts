@@ -262,6 +262,98 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     ]);
   });
 
+  it("omits unreadable provider tool descriptors before compatibility traversal", () => {
+    const unreadableParameters = {
+      name: "fuzz_move_delta",
+      description: "",
+      get parameters() {
+        throw new Error("fuzzplugin provider tool parameters getter failed");
+      },
+    };
+    const unreadableName = {
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          angle: { type: "string", maxLength: 8 },
+        },
+      },
+      get name() {
+        throw new Error("fuzzplugin provider tool name getter failed");
+      },
+    };
+    const unreadableCopy = new Proxy(
+      {
+        name: "fuzz_move_proxy",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            mode: {
+              anyOf: [{ const: "alpha", type: "string" }],
+            },
+          },
+        },
+      },
+      {
+        ownKeys() {
+          throw new Error("fuzzplugin provider tool copy failed");
+        },
+      },
+    );
+
+    expect(
+      normalizeGeminiToolSchemas({
+        provider: "gemini",
+        modelId: "gemini-3-pro",
+        modelApi: "gemini",
+        tools: [unreadableParameters, unreadableName] as never,
+      } as never),
+    ).toEqual([]);
+    expect(
+      normalizeDeepSeekToolSchemas({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        tools: [unreadableCopy] as never,
+      } as never),
+    ).toEqual([]);
+    expect(
+      normalizeOpenAIToolSchemas({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "openai-responses",
+        model: {
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          id: "gpt-5.4",
+        } as never,
+        tools: [unreadableParameters] as never,
+      } as never),
+    ).toEqual([]);
+
+    expect(
+      inspectGeminiToolSchemas({
+        provider: "gemini",
+        modelId: "gemini-3-pro",
+        modelApi: "gemini",
+        tools: [unreadableParameters, unreadableName] as never,
+      } as never),
+    ).toEqual([
+      {
+        toolName: "fuzz_move_delta",
+        toolIndex: 0,
+        violations: ["fuzz_move_delta.parameters"],
+      },
+      {
+        toolName: "tool[1]",
+        toolIndex: 1,
+        violations: ["tool[1].parameters.properties.angle.maxLength"],
+      },
+    ]);
+  });
+
   it("collapses anyOf and oneOf unions for the deepseek family", () => {
     const hooks = buildProviderToolCompatFamilyHooks("deepseek");
     const tools = [
