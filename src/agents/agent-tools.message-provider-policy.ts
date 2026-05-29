@@ -34,20 +34,36 @@ export function filterToolsByMessageProvider<TTool extends { name: string }>(
   tools: readonly TTool[],
   messageProvider?: string,
 ): TTool[] {
+  const normalizedProvider = normalizeOptionalLowercaseString(messageProvider);
+  if (!normalizedProvider) {
+    return [...tools];
+  }
+  const entries: Array<{ tool: TTool; name: string }> = [];
+  for (const tool of tools) {
+    try {
+      if (typeof tool.name === "string") {
+        entries.push({ tool, name: tool.name });
+      }
+    } catch {
+      // Malformed tool descriptors are omitted from provider-specific tool filtering.
+    }
+  }
   const filteredToolNames = filterToolNamesByMessageProvider(
-    tools.map((tool) => tool.name),
-    messageProvider,
+    entries.map((entry) => entry.name),
+    normalizedProvider,
   );
   const remainingCounts = new Map<string, number>();
   for (const toolName of filteredToolNames) {
     remainingCounts.set(toolName, (remainingCounts.get(toolName) ?? 0) + 1);
   }
-  return tools.filter((tool) => {
-    const remaining = remainingCounts.get(tool.name) ?? 0;
+  const filteredTools: TTool[] = [];
+  for (const entry of entries) {
+    const remaining = remainingCounts.get(entry.name) ?? 0;
     if (remaining <= 0) {
-      return false;
+      continue;
     }
-    remainingCounts.set(tool.name, remaining - 1);
-    return true;
-  });
+    remainingCounts.set(entry.name, remaining - 1);
+    filteredTools.push(entry.tool);
+  }
+  return filteredTools;
 }
