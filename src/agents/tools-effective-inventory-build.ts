@@ -22,25 +22,59 @@ import type {
 } from "./tools-effective-inventory.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
-function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
-  const rawLabel = normalizeOptionalString(tool.label) ?? "";
+function readInventoryToolField(
+  tool: AnyAgentTool,
+  key: "name" | "label" | "description" | "displaySummary",
+): unknown {
+  try {
+    return (tool as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readInventoryToolName(tool: AnyAgentTool): string | undefined {
+  return normalizeOptionalString(readInventoryToolField(tool, "name"));
+}
+
+function readInventoryToolString(
+  tool: AnyAgentTool,
+  key: "label" | "description" | "displaySummary",
+): string | undefined {
+  const value = readInventoryToolField(tool, key);
+  return typeof value === "string" ? value : undefined;
+}
+
+function buildReadableToolNameMap(tools: readonly AnyAgentTool[]): Map<string, AnyAgentTool> {
+  const byName = new Map<string, AnyAgentTool>();
+  for (const tool of tools) {
+    const name = readInventoryToolName(tool);
+    if (name) {
+      byName.set(name, tool);
+    }
+  }
+  return byName;
+}
+
+function resolveEffectiveToolLabel(tool: AnyAgentTool, toolName: string): string {
+  const rawLabel = normalizeOptionalString(readInventoryToolString(tool, "label")) ?? "";
   if (
     rawLabel &&
-    normalizeLowercaseStringOrEmpty(rawLabel) !== normalizeLowercaseStringOrEmpty(tool.name)
+    normalizeLowercaseStringOrEmpty(rawLabel) !== normalizeLowercaseStringOrEmpty(toolName)
   ) {
     return rawLabel;
   }
-  return resolveToolDisplay({ name: tool.name }).title;
+  return resolveToolDisplay({ name: toolName }).title;
 }
 
 function resolveRawToolDescription(tool: AnyAgentTool): string {
-  return normalizeOptionalString(tool.description) ?? "";
+  return normalizeOptionalString(readInventoryToolString(tool, "description")) ?? "";
 }
 
 function summarizeToolDescription(tool: AnyAgentTool): string {
   return summarizeToolDescriptionText({
     rawDescription: resolveRawToolDescription(tool),
-    displaySummary: tool.displaySummary,
+    displaySummary: readInventoryToolString(tool, "displaySummary"),
   });
 }
 
@@ -133,27 +167,34 @@ export function buildEffectiveToolInventoryEntries(
 
   return disambiguateLabels(
     tools
-      .map((tool) => {
-        const source = resolveEffectiveToolSource(tool, rawToolsByName.get(tool.name));
+      .flatMap((tool) => {
+        const toolName = readInventoryToolName(tool);
+        if (!toolName) {
+          return [];
+        }
+        const source = resolveEffectiveToolSource(tool, rawToolsByName.get(toolName));
         const metadata = source.pluginId
-          ? pluginToolMetadata.get(buildPluginToolMetadataKey(source.pluginId, tool.name))
+          ? pluginToolMetadata.get(buildPluginToolMetadataKey(source.pluginId, toolName))
           : undefined;
-        return Object.assign(
-          {
-            id: tool.name,
-            label:
-              normalizeOptionalString(metadata?.displayName) ?? resolveEffectiveToolLabel(tool),
-            description:
-              normalizeOptionalString(metadata?.description) ?? summarizeToolDescription(tool),
-            rawDescription:
-              normalizeOptionalString(metadata?.description) ??
-              resolveRawToolDescription(tool) ??
-              summarizeToolDescription(tool),
-            ...(metadata?.risk ? { risk: metadata.risk } : {}),
-            ...(metadata?.tags ? { tags: metadata.tags } : {}),
-          },
-          source,
-        ) satisfies EffectiveToolInventoryEntry;
+        return [
+          Object.assign(
+            {
+              id: toolName,
+              label:
+                normalizeOptionalString(metadata?.displayName) ??
+                resolveEffectiveToolLabel(tool, toolName),
+              description:
+                normalizeOptionalString(metadata?.description) ?? summarizeToolDescription(tool),
+              rawDescription:
+                normalizeOptionalString(metadata?.description) ??
+                resolveRawToolDescription(tool) ??
+                summarizeToolDescription(tool),
+              ...(metadata?.risk ? { risk: metadata.risk } : {}),
+              ...(metadata?.tags ? { tags: metadata.tags } : {}),
+            },
+            source,
+          ) satisfies EffectiveToolInventoryEntry,
+        ];
       })
       .toSorted((a, b) => a.label.localeCompare(b.label)),
   );
@@ -171,7 +212,7 @@ export function buildRuntimeCompatibleToolInventory(params: {
   entries: EffectiveToolInventoryEntry[];
   notices: EffectiveToolInventoryNotice[];
 } {
-  const rawToolsByName = new Map(params.tools.map((tool) => [tool.name, tool]));
+  const rawToolsByName = buildReadableToolNameMap(params.tools);
   const normalizedTools = normalizeAgentRuntimeTools({
     // Schema normalization can replace tool definitions, so hand the runtime
     // policy a mutable copy while keeping this inventory API readonly.

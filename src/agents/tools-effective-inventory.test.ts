@@ -57,14 +57,25 @@ vi.mock("./agent-tools.js", () => ({
 }));
 
 vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: (tool: { name: string }) => effectiveInventoryState.pluginMeta[tool.name],
+  getPluginToolMeta: (tool: { name: string }) => {
+    try {
+      return effectiveInventoryState.pluginMeta[tool.name];
+    } catch {
+      return undefined;
+    }
+  },
   buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
     JSON.stringify([pluginId, toolName]),
 }));
 
 vi.mock("./channel-tools.js", () => ({
-  getChannelAgentToolMeta: (tool: { name: string }) =>
-    effectiveInventoryState.channelMeta[tool.name],
+  getChannelAgentToolMeta: (tool: { name: string }) => {
+    try {
+      return effectiveInventoryState.channelMeta[tool.name];
+    } catch {
+      return undefined;
+    }
+  },
 }));
 
 vi.mock("./agent-tools.policy.js", () => ({
@@ -339,6 +350,58 @@ describe("resolveEffectiveToolInventory", () => {
         severity: "warning",
         message:
           'Tool "fuzz_move_angles" from plugin "fuzzplugin" has an unsupported runtime input schema (fuzz_move_angles.parameters.properties.target.$dynamicRef) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
+      },
+    ]);
+  });
+
+  it("quarantines tools with unreadable descriptors without dropping healthy inventory", async () => {
+    const unreadableName: Record<string, unknown> = {
+      label: "Fuzz Move Name",
+      description: "Unreadable name",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ text: "bad" }),
+    };
+    Object.defineProperty(unreadableName, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin name is unreadable");
+      },
+    });
+    const unreadableParameters: Record<string, unknown> = {
+      name: "fuzz_move_delta",
+      label: "Fuzz Move Delta",
+      description: "Unreadable parameters",
+      execute: async () => ({ text: "bad" }),
+    };
+    Object.defineProperty(unreadableParameters, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin parameters are unreadable");
+      },
+    });
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [
+        unreadableName as unknown as AnyAgentTool,
+        unreadableParameters as unknown as AnyAgentTool,
+        mockTool({ name: "exec", label: "Exec", description: "Run shell commands" }),
+      ],
+    });
+
+    const result = resolveEffectiveToolInventory({ cfg: {} });
+
+    expect(result.groups.flatMap((group) => group.tools.map((tool) => tool.id))).toEqual(["exec"]);
+    expect(result.notices).toEqual([
+      {
+        id: "unsupported-tool-schema:tool[0]",
+        severity: "warning",
+        message:
+          'Tool "tool[0]" has an unsupported runtime input schema (tool[0].name is unreadable) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
+      },
+      {
+        id: "unsupported-tool-schema:fuzz_move_delta",
+        severity: "warning",
+        message:
+          'Tool "fuzz_move_delta" has an unsupported runtime input schema (fuzz_move_delta.parameters is unreadable) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.',
       },
     ]);
   });
