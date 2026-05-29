@@ -639,6 +639,63 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     );
   });
 
+  it("preserves code-mode metadata when wrapping with a descriptor snapshot", async () => {
+    beforeToolCallHook = installBeforeToolCallHook();
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const sourceTool = markCodeModeControlTool({
+      name: CODE_MODE_EXEC_TOOL_NAME,
+      execute,
+      description: "exec",
+      parameters: {},
+    } as any);
+    const tool = wrapToolWithBeforeToolCallHook(
+      sourceTool,
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+      },
+      {
+        descriptor: {
+          name: CODE_MODE_EXEC_TOOL_NAME,
+          description: "exec",
+          parameters: {},
+          execute,
+        },
+      },
+    );
+
+    await tool.execute("call-descriptor-code-mode-exec", { command: "return 4;" });
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-descriptor-code-mode-exec",
+      { command: "return 4;", code: "return 4;" },
+      undefined,
+      undefined,
+    );
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { command: "return 4;", code: "return 4;" },
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        runId: "run-main",
+        toolCallId: "call-descriptor-code-mode-exec",
+      },
+      {
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+        toolCallId: "call-descriptor-code-mode-exec",
+      },
+    );
+  });
+
   it("mirrors single-alias hook rewrites for code-mode exec aliases", async () => {
     beforeToolCallHook = installBeforeToolCallHook({
       runBeforeToolCallImpl: async () => ({ params: { command: "return 2;" } }),

@@ -36,6 +36,73 @@ function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
   } as unknown as AnyAgentTool;
 }
 
+function createDescriptorTrapTool(params: {
+  name: string;
+  description?: string;
+  parameters?: unknown;
+  execute?: AnyAgentTool["execute"];
+  prepareArguments?: AnyAgentTool["prepareArguments"];
+  maxNameReads?: number;
+  maxExecuteReads?: number;
+  throwDescription?: boolean;
+  throwPrepareArguments?: boolean;
+}): { tool: AnyAgentTool; nameReads: () => number; executeReads: () => number } {
+  let nameReads = 0;
+  let executeReads = 0;
+  const tool: Record<string, unknown> = {
+    parameters: params.parameters ?? { type: "object", properties: {} },
+  };
+  if (params.maxExecuteReads === undefined) {
+    tool.execute = params.execute ?? vi.fn(async () => textToolResult("done"));
+  } else {
+    Object.defineProperty(tool, "execute", {
+      enumerable: true,
+      get: () => {
+        executeReads += 1;
+        if (executeReads > params.maxExecuteReads!) {
+          throw new Error("execute was read too many times");
+        }
+        return params.execute ?? vi.fn(async () => textToolResult("done"));
+      },
+    });
+  }
+  Object.defineProperty(tool, "name", {
+    enumerable: true,
+    get: () => {
+      nameReads += 1;
+      if (params.maxNameReads !== undefined && nameReads > params.maxNameReads) {
+        throw new Error("name was read too many times");
+      }
+      return params.name;
+    },
+  });
+  Object.defineProperty(tool, "description", {
+    enumerable: true,
+    get: () => {
+      if (params.throwDescription) {
+        throw new Error("description is unavailable");
+      }
+      return params.description ?? "Mock plugin tool.";
+    },
+  });
+  if (params.prepareArguments) {
+    tool.prepareArguments = params.prepareArguments;
+  }
+  if (params.throwPrepareArguments) {
+    Object.defineProperty(tool, "prepareArguments", {
+      enumerable: true,
+      get: () => {
+        throw new Error("argument preparer is unavailable");
+      },
+    });
+  }
+  return {
+    tool: tool as AnyAgentTool,
+    nameReads: () => nameReads,
+    executeReads: () => executeReads,
+  };
+}
+
 function mediaResult(mediaUrl: string, audioAsVoice?: boolean): AgentToolResult<unknown> {
   return {
     content: [{ type: "text", text: "Generated media reply." }],
@@ -442,6 +509,109 @@ describe("createCodexDynamicToolBridge", () => {
         },
       ],
     });
+  });
+
+  it("keeps projected tool metadata stable after fragile descriptor reads", async () => {
+    const execute = vi.fn(async () => textToolResult("ready"));
+    const fuzzTool = createDescriptorTrapTool({
+      name: "mockplugin_status",
+      description: "Read mock plugin status.",
+      execute,
+      maxNameReads: 1,
+      maxExecuteReads: 1,
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [fuzzTool.tool],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["mockplugin_status"]);
+    expect(bridge.specs.map((tool) => tool.name)).toEqual(["mockplugin_status"]);
+
+    await expect(
+      bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "mockplugin_status",
+        arguments: {},
+      }),
+    ).resolves.toEqual(expectInputText("ready"));
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(fuzzTool.nameReads()).toBe(1);
+    expect(fuzzTool.executeReads()).toBe(1);
+  });
+
+  it("keeps tools available when optional descriptions are unreadable", async () => {
+    const execute = vi.fn(async () => textToolResult("found"));
+    const { tool } = createDescriptorTrapTool({
+      name: "mockplugin_lookup",
+      execute,
+      throwDescription: true,
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.specs).toHaveLength(1);
+    expect(bridge.specs[0]).toMatchObject({
+      name: "mockplugin_lookup",
+      description: "",
+    });
+    await expect(
+      bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "mockplugin_lookup",
+        arguments: {},
+      }),
+    ).resolves.toEqual(expectInputText("found"));
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("quarantines tools with unreadable argument preparers before execution", async () => {
+    const execute = vi.fn(async () => textToolResult("unsafe"));
+    const { tool } = createDescriptorTrapTool({
+      name: "mockplugin_guarded",
+      execute,
+      throwPrepareArguments: true,
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools: [tool],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs).toEqual([]);
+    expect(bridge.specs).toEqual([]);
+    expect(bridge.telemetry.quarantinedTools).toEqual([
+      {
+        tool: "mockplugin_guarded",
+        violations: ["mockplugin_guarded.prepareArguments is unreadable"],
+      },
+    ]);
+    await expect(
+      bridge.handleToolCall({
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "mockplugin_guarded",
+        arguments: {},
+      }),
+    ).resolves.toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: "OpenClaw tool is disabled because its Codex dynamic tool schema is unsupported: mockplugin_guarded",
+        },
+      ],
+    });
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("does not quarantine executable tools from registered-only schema diagnostics", async () => {
