@@ -16,17 +16,25 @@ export function readCodexDiagnosticToolParameters(tool: {
 
 export function buildCodexDiagnosticToolDefinitions(
   tools: readonly {
-    name: string;
-    description: string;
+    name?: unknown;
+    description?: unknown;
     inputSchema?: unknown;
     parameters?: unknown;
   }[],
 ) {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    parameters: readCodexDiagnosticToolParameters(tool),
-  }));
+  return tools.flatMap((tool) => {
+    const name = readCodexDiagnosticToolString(tool, "name")?.trim();
+    if (!name) {
+      return [];
+    }
+    return [
+      {
+        name,
+        description: readCodexDiagnosticToolString(tool, "description") ?? "",
+        parameters: readCodexDiagnosticToolParameters(tool),
+      },
+    ];
+  });
 }
 
 export function utf8JsonByteLength(value: unknown): number | undefined {
@@ -43,6 +51,14 @@ function readValue(record: object, key: string): unknown {
   } catch {
     return undefined;
   }
+}
+
+function readCodexDiagnosticToolString(
+  tool: object,
+  key: "name" | "description",
+): string | undefined {
+  const value = readValue(tool, key);
+  return typeof value === "string" ? value : undefined;
 }
 
 export function fingerprintCodexLogValue(namespace: string, value: string): string {

@@ -17,6 +17,50 @@ function defineThrowingProperty(record: Record<string, unknown>, key: string, me
 }
 
 describe("Codex app-server attempt diagnostics", () => {
+  it("skips unreadable synthetic tool names in diagnostic definitions", () => {
+    const unreadableNameTool = {
+      description: "Synthetic unreadable diagnostic tool",
+      parameters: { type: "object", properties: {} },
+    };
+    defineThrowingProperty(
+      unreadableNameTool,
+      "name",
+      "fuzzplugin diagnostic tool name read failed",
+    );
+    const unreadableDescriptionTool = {
+      name: "fuzz_move_diagnostics",
+      parameters: { type: "object", properties: {} },
+    };
+    defineThrowingProperty(
+      unreadableDescriptionTool,
+      "description",
+      "mockplugin diagnostic tool description read failed",
+    );
+
+    expect(
+      buildCodexDiagnosticToolDefinitions([
+        unreadableNameTool,
+        unreadableDescriptionTool,
+        {
+          name: "message",
+          description: "Healthy tool",
+          parameters: { type: "object", properties: {} },
+        },
+      ]),
+    ).toEqual([
+      {
+        name: "fuzz_move_diagnostics",
+        description: "",
+        parameters: { type: "object", properties: {} },
+      },
+      {
+        name: "message",
+        description: "Healthy tool",
+        parameters: { type: "object", properties: {} },
+      },
+    ]);
+  });
+
   it("omits unreadable synthetic tool parameters from diagnostic definitions", () => {
     const tool = {
       name: "fuzz_move_report",
