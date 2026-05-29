@@ -47,5 +47,19 @@ export function filterLocalModelLeanTools(params: {
   if (!isLocalModelLeanEnabled(params)) {
     return params.tools;
   }
-  return params.tools.filter((tool) => !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(tool.name));
+  return params.tools.filter((tool) => {
+    const name = readToolName(tool);
+    if (!name) {
+      return false;
+    }
+    return !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(name);
+  });
+}
+
+function readToolName(tool: AnyAgentTool): string | undefined {
+  try {
+    return tool.name;
+  } catch {
+    return undefined;
+  }
 }

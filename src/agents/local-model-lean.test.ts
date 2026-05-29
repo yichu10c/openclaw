@@ -162,4 +162,30 @@ describe("local model lean tool filtering", () => {
       }).map((tool) => tool.name),
     ).toEqual(["read", "exec"]);
   });
+
+  it("omits unreadable synthetic tool names while preserving healthy lean tools", () => {
+    const unreadableTool: Record<string, unknown> = {};
+    Object.defineProperty(unreadableTool, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin lean tool name read failed");
+      },
+    });
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      filterLocalModelLeanTools({
+        tools: [unreadableTool as unknown as AnyAgentTool, ...tools(["read", "browser", "exec"])],
+        config: cfg,
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "exec"]);
+  });
 });
