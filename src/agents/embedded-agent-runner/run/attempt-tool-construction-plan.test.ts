@@ -38,6 +38,40 @@ function expectConstructionPlan(
 }
 
 describe("applyEmbeddedAttemptToolsAllow", () => {
+  it("omits unreadable tool names when applying explicit allowlists", () => {
+    const unreadableName = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("fuzzplugin tool name exploded");
+      },
+    }) as { name: string };
+    const tools = [unreadableName, { name: "mockplugin_lookup" }, { name: "read" }];
+
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, ["mockplugin_lookup"]).map((tool) => tool.name),
+    ).toEqual(["mockplugin_lookup"]);
+  });
+
+  it("omits unreadable plugin tool names when expanding plugin allowlist groups", () => {
+    const unreadableName = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("fuzzplugin plugin tool name exploded");
+      },
+    }) as { name: string; pluginId?: string };
+    const tools = [
+      { name: "read" },
+      unreadableName,
+      { name: "mockplugin_lookup", pluginId: "mockplugin" },
+    ];
+    const toolMeta = (tool: { name: string; pluginId?: string }) =>
+      tool.pluginId ? { pluginId: tool.pluginId } : undefined;
+
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, ["group:plugins"], { toolMeta }).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["mockplugin_lookup"]);
+  });
+
   it("keeps explicit toolsAllow authoritative after force-added tools are built", () => {
     const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
 
