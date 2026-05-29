@@ -227,6 +227,72 @@ describe("plugin tools MCP server", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it("applies MCP plugin tool argument preparers before execution", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: "Stored.",
+    });
+    const prepareArguments = vi.fn((args: unknown) => ({
+      ...(args && typeof args === "object" ? (args as Record<string, unknown>) : {}),
+      normalized: true,
+    }));
+    const tool = {
+      name: "mockplugin_store",
+      description: "Store mockplugin memory",
+      parameters: {
+        type: "object",
+        properties: {
+          text: { type: "string" },
+          normalized: { type: "boolean" },
+        },
+      },
+      prepareArguments,
+      execute,
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "mockplugin_store",
+      arguments: { text: "remember this" },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
+    expect(prepareArguments).toHaveBeenCalledWith({ text: "remember this" });
+    expect(execute).toHaveBeenCalledTimes(1);
+    const executeCall = requireFirstMockCall(execute.mock.calls, "plugin tool execute");
+    expect(executeCall[1]).toEqual({ text: "remember this", normalized: true });
+  });
+
+  it("omits MCP plugin tools with unreadable argument preparers", async () => {
+    const execute = vi.fn().mockResolvedValue({
+      content: "Unsafe.",
+    });
+    const tool: Record<string, unknown> = {
+      name: "mockplugin_guarded",
+      description: "Guarded mockplugin memory",
+      parameters: { type: "object", properties: {} },
+      execute,
+    };
+    Object.defineProperty(tool, "prepareArguments", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin argument preparer read failed");
+      },
+    });
+
+    const handlers = createPluginToolsMcpHandlers([tool as unknown as AnyAgentTool]);
+
+    await expect(handlers.listTools()).resolves.toEqual({ tools: [] });
+    const result = await handlers.callTool({
+      name: "mockplugin_guarded",
+      arguments: {},
+    });
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Unknown tool: mockplugin_guarded" }],
+      isError: true,
+    });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("serializes plugin tool results that do not use the MCP content envelope", async () => {
     const execute = vi.fn().mockResolvedValue({
       provider: "kitchen-sink-search",

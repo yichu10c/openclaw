@@ -18,11 +18,12 @@ type PluginToolsMcpEntry = {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  prepareArguments?: AnyAgentTool["prepareArguments"];
 };
 
 function readPluginToolField(
   tool: AnyAgentTool,
-  field: "description" | "execute" | "name" | "parameters",
+  field: "description" | "execute" | "name" | "parameters" | "prepareArguments",
 ): { readable: true; value: unknown } | { readable: false } {
   try {
     return { readable: true, value: tool[field] };
@@ -36,6 +37,12 @@ function resolveJsonSchemaForToolParameters(params: unknown): Record<string, unk
     return params as Record<string, unknown>;
   }
   return { type: "object", properties: {} };
+}
+
+function isPrepareArguments(
+  value: unknown,
+): value is NonNullable<AnyAgentTool["prepareArguments"]> {
+  return typeof value === "function";
 }
 
 function preparePluginToolsMcpEntry(tool: AnyAgentTool): PluginToolsMcpEntry | undefined {
@@ -62,6 +69,14 @@ function preparePluginToolsMcpEntry(tool: AnyAgentTool): PluginToolsMcpEntry | u
   const description =
     rawDescription.readable && typeof rawDescription.value === "string" ? rawDescription.value : "";
 
+  const rawPrepareArguments = readPluginToolField(tool, "prepareArguments");
+  if (
+    !rawPrepareArguments.readable ||
+    (rawPrepareArguments.value !== undefined && !isPrepareArguments(rawPrepareArguments.value))
+  ) {
+    return undefined;
+  }
+
   try {
     const safeTool = {
       name,
@@ -69,6 +84,12 @@ function preparePluginToolsMcpEntry(tool: AnyAgentTool): PluginToolsMcpEntry | u
       parameters: rawParameters.value,
       execute: rawExecute.value,
     } as AnyAgentTool;
+    const prepareArguments = isPrepareArguments(rawPrepareArguments.value)
+      ? rawPrepareArguments.value
+      : undefined;
+    if (prepareArguments) {
+      safeTool.prepareArguments = prepareArguments;
+    }
     copyPluginToolMeta(tool, safeTool);
     const wrappedTool = isToolWrappedWithBeforeToolCallHook(tool)
       ? rewrapToolWithBeforeToolCallHook(tool, undefined, { approvalMode: "report" })
@@ -78,6 +99,7 @@ function preparePluginToolsMcpEntry(tool: AnyAgentTool): PluginToolsMcpEntry | u
       name,
       description,
       inputSchema: resolveJsonSchemaForToolParameters(rawParameters.value),
+      ...(prepareArguments ? { prepareArguments } : {}),
     };
   } catch {
     return undefined;
@@ -92,9 +114,9 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
       entries.push(entry);
     }
   }
-  const toolMap = new Map<string, AnyAgentTool>();
+  const toolMap = new Map<string, PluginToolsMcpEntry>();
   for (const entry of entries) {
-    toolMap.set(entry.name, entry.tool);
+    toolMap.set(entry.name, entry);
   }
 
   return {
@@ -106,15 +128,18 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
       })),
     }),
     callTool: async (params: CallPluginToolParams, signal?: AbortSignal) => {
-      const tool = toolMap.get(params.name);
-      if (!tool) {
+      const entry = toolMap.get(params.name);
+      if (!entry) {
         return {
           content: [{ type: "text", text: `Unknown tool: ${params.name}` }],
           isError: true,
         };
       }
       try {
-        const result = await tool.execute(`mcp-${Date.now()}`, params.arguments ?? {}, signal);
+        const args = entry.prepareArguments
+          ? entry.prepareArguments(params.arguments ?? {})
+          : (params.arguments ?? {});
+        const result = await entry.tool.execute(`mcp-${Date.now()}`, args, signal);
         const rawContent =
           result && typeof result === "object" && "content" in result
             ? (result as { content?: unknown }).content
