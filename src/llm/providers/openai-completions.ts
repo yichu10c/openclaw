@@ -38,6 +38,7 @@ import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js"
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { projectProviderTools, type ProjectedProviderTool } from "./tool-projection.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -590,8 +591,10 @@ function buildParams(
     params.temperature = options.temperature;
   }
 
-  if (context.tools && context.tools.length > 0) {
-    params.tools = convertTools(context.tools, compat);
+  const projectedTools = context.tools?.length ? projectProviderTools(context.tools) : [];
+  const projectedToolNames = new Set(projectedTools.map((tool) => tool.name));
+  if (projectedTools.length > 0) {
+    params.tools = convertTools(projectedTools, compat);
     if (compat.zaiToolStream) {
       params.tool_stream = true;
     }
@@ -605,7 +608,10 @@ function buildParams(
   }
 
   if (options?.toolChoice) {
-    params.tool_choice = options.toolChoice;
+    const toolChoice = resolveOpenAICompletionsToolChoice(options.toolChoice, projectedToolNames);
+    if (toolChoice !== undefined) {
+      params.tool_choice = toolChoice;
+    }
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
@@ -1052,20 +1058,46 @@ export function convertMessages(
   return params;
 }
 
+function resolveOpenAICompletionsToolChoice(
+  toolChoice: OpenAICompletionsOptions["toolChoice"],
+  availableToolNames: ReadonlySet<string>,
+): OpenAICompletionsOptions["toolChoice"] | undefined {
+  if (toolChoice === "auto" || toolChoice === "none") {
+    return toolChoice;
+  }
+  if (toolChoice === "required") {
+    return availableToolNames.size > 0 ? toolChoice : undefined;
+  }
+  const targetName = toolChoice?.function.name;
+  return targetName && availableToolNames.has(targetName) ? toolChoice : undefined;
+}
+
 function convertTools(
-  tools: Tool[],
+  tools: ProjectedProviderTool[],
   compat: ResolvedOpenAICompletionsCompat,
 ): OpenAI.Chat.Completions.ChatCompletionTool[] {
-  return tools.map((tool) => ({
-    type: "function",
-    function: {
+  return tools.map((tool) => {
+    const func: {
+      name: string;
+      description?: string;
+      parameters: Record<string, unknown>;
+      strict?: boolean;
+    } = {
       name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters as Record<string, unknown>, // TypeBox already generates JSON Schema
-      // Only include strict if provider supports it. Some reject unknown fields.
-      ...(compat.supportsStrictMode && { strict: false }),
-    },
-  }));
+      parameters: tool.parameters,
+    };
+    if (tool.description !== undefined) {
+      func.description = tool.description;
+    }
+    // Only include strict if provider supports it. Some reject unknown fields.
+    if (compat.supportsStrictMode) {
+      func.strict = false;
+    }
+    return {
+      type: "function",
+      function: func,
+    };
+  });
 }
 
 function parseChunkUsage(

@@ -34,6 +34,7 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
+import { projectProviderTools, type ProjectedProviderTool } from "./tool-projection.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -99,7 +100,9 @@ const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) 
 const fromClaudeCodeName = (name: string, tools?: Tool[]) => {
   if (tools && tools.length > 0) {
     const lowerName = name.toLowerCase();
-    const matchedTool = tools.find((tool) => tool.name.toLowerCase() === lowerName);
+    const matchedTool = projectProviderTools(tools).find(
+      (tool) => tool.name.toLowerCase() === lowerName,
+    );
     if (matchedTool) {
       return matchedTool.name;
     }
@@ -973,10 +976,12 @@ function buildParams(
     params.temperature = options.temperature;
   }
 
-  if (context.tools && context.tools.length > 0) {
+  const projectedTools = context.tools?.length ? projectProviderTools(context.tools) : [];
+  const projectedToolNames = new Set(projectedTools.map((tool) => tool.name));
+  if (projectedTools.length > 0) {
     const compat = getAnthropicCompat(model);
     params.tools = convertTools(
-      context.tools,
+      projectedTools,
       isOAuthToken,
       compat.supportsEagerToolInputStreaming,
       compat.supportsCacheControlOnTools ? cacheControl : undefined,
@@ -1023,10 +1028,9 @@ function buildParams(
   }
 
   if (options?.toolChoice) {
-    if (typeof options.toolChoice === "string") {
-      params.tool_choice = { type: options.toolChoice };
-    } else {
-      params.tool_choice = options.toolChoice;
+    const toolChoice = resolveAnthropicToolChoice(options.toolChoice, projectedToolNames);
+    if (toolChoice !== undefined) {
+      params.tool_choice = toolChoice;
     }
   }
 
@@ -1220,11 +1224,15 @@ function shouldUseFineGrainedToolStreamingBeta(
   model: Model<"anthropic-messages">,
   context: Context,
 ): boolean {
-  return !!context.tools?.length && !getAnthropicCompat(model).supportsEagerToolInputStreaming;
+  return (
+    !!context.tools?.length &&
+    projectProviderTools(context.tools).length > 0 &&
+    !getAnthropicCompat(model).supportsEagerToolInputStreaming
+  );
 }
 
 function convertTools(
-  tools: Tool[],
+  tools: ProjectedProviderTool[],
   isOAuthToken: boolean,
   supportsEagerToolInputStreaming: boolean,
   cacheControl?: CacheControlEphemeral,
@@ -1234,20 +1242,36 @@ function convertTools(
   }
 
   return tools.map((tool, index) => {
-    const schema = tool.parameters as { properties?: unknown; required?: string[] };
-
-    return {
+    const result: Anthropic.Messages.Tool = {
       name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
-      description: tool.description,
-      ...(supportsEagerToolInputStreaming ? { eager_input_streaming: true } : {}),
       input_schema: {
         type: "object",
-        properties: schema.properties ?? {},
-        required: schema.required ?? [],
+        properties: tool.parameters.properties ?? {},
+        required: Array.isArray(tool.parameters.required) ? tool.parameters.required : [],
       },
-      ...(cacheControl && index === tools.length - 1 ? { cache_control: cacheControl } : {}),
     };
+    if (tool.description !== undefined) {
+      result.description = tool.description;
+    }
+    if (supportsEagerToolInputStreaming) {
+      result.eager_input_streaming = true;
+    }
+    if (cacheControl && index === tools.length - 1) {
+      result.cache_control = cacheControl;
+    }
+    return result;
   });
+}
+
+function resolveAnthropicToolChoice(
+  toolChoice: AnthropicOptions["toolChoice"],
+  availableToolNames: ReadonlySet<string>,
+): MessageCreateParamsStreaming["tool_choice"] | undefined {
+  if (typeof toolChoice === "string") {
+    return availableToolNames.size > 0 ? { type: toolChoice } : undefined;
+  }
+  const targetName = toolChoice?.name;
+  return targetName && availableToolNames.has(targetName) ? toolChoice : undefined;
 }
 
 function mapStopReason(reason: string): StopReason {

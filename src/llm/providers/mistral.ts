@@ -27,6 +27,7 @@ import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { projectProviderTools, type ProjectedProviderTool } from "./tool-projection.js";
 import { transformMessages } from "./transform-messages.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
@@ -275,8 +276,10 @@ function buildChatPayload(
     messages: toChatMessages(messages, model.input.includes("image")),
   };
 
-  if (context.tools?.length) {
-    payload.tools = toFunctionTools(context.tools);
+  const projectedTools = context.tools?.length ? projectProviderTools(context.tools) : [];
+  const projectedToolNames = new Set(projectedTools.map((tool) => tool.name));
+  if (projectedTools.length > 0) {
+    payload.tools = toFunctionTools(projectedTools);
   }
   if (options?.temperature !== undefined) {
     payload.temperature = options.temperature;
@@ -285,7 +288,10 @@ function buildChatPayload(
     payload.maxTokens = options.maxTokens;
   }
   if (options?.toolChoice) {
-    payload.toolChoice = mapToolChoice(options.toolChoice);
+    const toolChoice = mapToolChoice(options.toolChoice, projectedToolNames);
+    if (toolChoice !== undefined) {
+      payload.toolChoice = toolChoice;
+    }
   }
   if (options?.promptMode) {
     payload.promptMode = options.promptMode;
@@ -502,16 +508,23 @@ async function consumeChatStream(
   }
 }
 
-function toFunctionTools(tools: Tool[]): Array<FunctionTool & { type: "function" }> {
-  return tools.map((tool) => ({
-    type: "function",
-    function: {
+function toFunctionTools(
+  tools: ProjectedProviderTool[],
+): Array<FunctionTool & { type: "function" }> {
+  return tools.map((tool) => {
+    const func: FunctionTool["function"] = {
       name: tool.name,
-      description: tool.description,
       parameters: stripSymbolKeys(tool.parameters) as Record<string, unknown>,
       strict: false,
-    },
-  }));
+    };
+    if (tool.description !== undefined) {
+      func.description = tool.description;
+    }
+    return {
+      type: "function",
+      function: func,
+    };
+  });
 }
 
 function stripSymbolKeys(value: unknown): unknown {
@@ -684,6 +697,7 @@ function mapReasoningEffort(
 
 function mapToolChoice(
   choice: MistralOptions["toolChoice"],
+  availableToolNames: ReadonlySet<string>,
 ):
   | "auto"
   | "none"
@@ -694,8 +708,14 @@ function mapToolChoice(
   if (!choice) {
     return undefined;
   }
-  if (choice === "auto" || choice === "none" || choice === "any" || choice === "required") {
+  if (choice === "auto" || choice === "none") {
     return choice;
+  }
+  if (choice === "any" || choice === "required") {
+    return availableToolNames.size > 0 ? choice : undefined;
+  }
+  if (!availableToolNames.has(choice.function.name)) {
+    return undefined;
   }
   return {
     type: "function",

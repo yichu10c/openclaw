@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Context, Model } from "../types.js";
+import type { Context, Model, Tool } from "../types.js";
 
 const anthropicMockState = vi.hoisted(() => ({
   configs: [] as unknown[],
@@ -43,6 +43,64 @@ function makeAnthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}
     maxTokens: 4096,
     ...overrides,
   } satisfies Model<"anthropic-messages">;
+}
+
+function makeHostileProviderTools(): Tool[] {
+  const unreadableName = Object.defineProperty(
+    {
+      description: "Bad name",
+      parameters: { type: "object", properties: {} },
+    },
+    "name",
+    {
+      get() {
+        throw new Error("fuzzplugin name exploded");
+      },
+    },
+  ) as unknown as Tool;
+  const unreadableParameters = Object.defineProperty(
+    {
+      name: "fuzzplugin_unreadable_parameters",
+      description: "Bad parameters",
+      parameters: undefined,
+    },
+    "parameters",
+    {
+      get() {
+        throw new Error("fuzzplugin parameters exploded");
+      },
+    },
+  ) as unknown as Tool;
+  const unsupportedDynamicSchema = {
+    name: "fuzzplugin_dynamic_schema",
+    description: "Unsupported schema",
+    parameters: { type: "object", properties: { target: { $dynamicRef: "#target" } } },
+  } as unknown as Tool;
+  const unreadableDescription = Object.defineProperty(
+    {
+      name: "mockplugin_status",
+      description: undefined,
+      parameters: { type: "object", properties: {} },
+    },
+    "description",
+    {
+      get() {
+        throw new Error("mockplugin description exploded");
+      },
+    },
+  ) as unknown as Tool;
+  const healthy = {
+    name: "mockplugin_lookup",
+    description: "Lookup",
+    parameters: { type: "object", properties: {} },
+  } as unknown as Tool;
+  return [
+    unreadableName,
+    unreadableParameters,
+    unsupportedDynamicSchema,
+    unreadableDescription,
+    healthy,
+  ];
 }
 
 describe("Anthropic provider", () => {
@@ -192,5 +250,54 @@ describe("Anthropic provider", () => {
     expect((capturedPayload as { output_config?: unknown }).output_config).toEqual({
       effort: "high",
     });
+  });
+
+  it("omits unreadable provider tools and stale pinned tool choices", async () => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({
+        compat: {
+          supportsEagerToolInputStreaming: false,
+          supportsCacheControlOnTools: false,
+        },
+      }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: makeHostileProviderTools(),
+      },
+      {
+        apiKey: "sk-ant-provider",
+        toolChoice: { type: "tool", name: "fuzzplugin_dynamic_schema" },
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop after payload");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const payload = capturedPayload as { tools?: unknown[]; tool_choice?: unknown };
+    expect(payload).not.toHaveProperty("tool_choice");
+    expect(payload.tools).toEqual([
+      {
+        name: "mockplugin_status",
+        input_schema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: "mockplugin_lookup",
+        description: "Lookup",
+        input_schema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+      },
+    ]);
   });
 });
