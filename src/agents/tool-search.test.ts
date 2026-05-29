@@ -308,18 +308,60 @@ describe("Tool Search", () => {
     });
 
     const clientTool = fakeTool("client_pick_file", "Ask the client to pick a file");
+    const parameterlessClientTool = {
+      name: "client_confirm",
+      label: "client_confirm",
+      description: "Confirm a client-side action",
+    };
     const compacted = addClientToolsToToolSearchCatalog({
-      tools: [clientTool],
+      tools: [clientTool, parameterlessClientTool as never],
       config,
       sessionId: "session-client",
     });
 
     expect(compacted.tools).toEqual([]);
-    expect(compacted.catalogToolCount).toBe(1);
-    const clientEntry = testing.sessionCatalogs
-      .get("session:session-client")
-      ?.entries.find((entry) => entry.id === "client:client:client_pick_file");
+    expect(compacted.catalogToolCount).toBe(2);
+    const entries = testing.sessionCatalogs.get("session:session-client")?.entries ?? [];
+    const clientEntry = entries.find((entry) => entry.id === "client:client:client_pick_file");
     expect(clientEntry?.source).toBe("client");
+    const parameterlessEntry = entries.find((entry) => entry.id === "client:client:client_confirm");
+    expect(parameterlessEntry?.source).toBe("client");
+    expect(parameterlessEntry?.parameters).toEqual({});
+  });
+
+  it("omits malformed catalog schemas before registering Tool Search targets", () => {
+    const codeTool = fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode");
+    const bigintSchema = pluginTool("mockplugin_bigint_schema", "Tool with non-json-safe schema");
+    bigintSchema.parameters = {
+      type: "object",
+      properties: {
+        value: { const: 1n },
+      },
+    } as never;
+    const unreadableSchema = pluginTool(
+      "mockplugin_unreadable_schema",
+      "Tool with unreadable schema",
+    );
+    Object.defineProperty(unreadableSchema, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin parameters are unreadable");
+      },
+    });
+    const healthy = pluginTool("mockplugin_schema_ok", "Tool with healthy schema");
+    const catalogRef = createToolSearchCatalogRef();
+
+    const compacted = applyToolSearchCatalog({
+      tools: [codeTool, bigintSchema, unreadableSchema, healthy],
+      config: { tools: { toolSearch: true } } as never,
+      sessionId: "session-malformed-schema",
+      catalogRef,
+    });
+
+    expect(compacted.catalogToolCount).toBe(1);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
+      "mockplugin_schema_ok",
+    ]);
   });
 
   it("wraps cataloged OpenClaw tools with before_tool_call hooks", async () => {

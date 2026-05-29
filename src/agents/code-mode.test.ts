@@ -198,6 +198,73 @@ describe("Code Mode", () => {
     expect(compacted.catalogToolCount).toBe(2);
   });
 
+  it("omits unreadable catalog tool names while preserving healthy searchable siblings", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const unreadable = {
+      get name() {
+        throw new Error("fuzzplugin tool search name failed");
+      },
+      description: "Malformed plugin tool",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(async () => jsonResult({ ok: true })),
+    } as AnyAgentTool;
+    const healthy = pluginTool("mockplugin_create_ticket", "Create a mock ticket");
+
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, unreadable, healthy],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      CODE_MODE_EXEC_TOOL_NAME,
+      CODE_MODE_WAIT_TOOL_NAME,
+    ]);
+    expect(compacted.catalogToolCount).toBe(1);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
+      "mockplugin_create_ticket",
+    ]);
+  });
+
+  it("omits malformed catalog parameters while preserving healthy searchable siblings", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const bigintSchema = pluginTool("mockplugin_bigint_schema", "Tool with non-json-safe schema");
+    bigintSchema.parameters = {
+      type: "object",
+      properties: {
+        value: { const: 1n },
+      },
+    } as never;
+    const unreadableSchema = pluginTool(
+      "mockplugin_unreadable_schema",
+      "Tool with unreadable schema",
+    );
+    Object.defineProperty(unreadableSchema, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin parameters are unreadable");
+      },
+    });
+    const healthy = pluginTool("mockplugin_schema_ok", "Tool with healthy schema");
+
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, bigintSchema, unreadableSchema, healthy],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.catalogToolCount).toBe(1);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
+      "mockplugin_schema_ok",
+    ]);
+  });
+
   it("hides normal tools when only the active agent enables code mode", () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {

@@ -50,6 +50,12 @@ const DEFAULT_SNAPSHOT_TTL_SECONDS = 900;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 50;
 const MAX_ACTIVE_CODE_MODE_RUNS = 64;
+const TOOL_SEARCH_CONTROL_TOOL_NAMES = new Set([
+  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+  TOOL_SEARCH_RAW_TOOL_NAME,
+  TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_CALL_RAW_TOOL_NAME,
+]);
 
 type CodeModeLanguage = "javascript" | "typescript";
 
@@ -947,6 +953,14 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   return [execTool, waitTool];
 }
 
+function readToolName(tool: AnyAgentTool): string | undefined {
+  try {
+    return typeof tool.name === "string" ? tool.name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function applyCodeModeCatalog(params: {
   tools: AnyAgentTool[];
   config?: OpenClawConfig;
@@ -967,11 +981,7 @@ export function applyCodeModeCatalog(params: {
   }
   const tools = params.tools.filter(
     (tool) =>
-      isCodeModeControlTool(tool) ||
-      (tool.name !== TOOL_SEARCH_CODE_MODE_TOOL_NAME &&
-        tool.name !== TOOL_SEARCH_RAW_TOOL_NAME &&
-        tool.name !== TOOL_DESCRIBE_RAW_TOOL_NAME &&
-        tool.name !== TOOL_CALL_RAW_TOOL_NAME),
+      isCodeModeControlTool(tool) || !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(readToolName(tool) ?? ""),
   );
   return applyToolCatalogCompaction({
     ...params,
